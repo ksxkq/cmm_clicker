@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">cmm_clicker</string>
+    <string name="accessibility_service_name">cmm_clicker 辅助服务</string>
+    <string name="accessibility_service_desc">用于执行自动化动作（点击、滑动等）</string>
 </resources>

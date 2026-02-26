@@ -12,7 +12,9 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -129,6 +131,7 @@ class TaskEditorGlobalOverlay(
         const val SHEET_ENTER_DURATION_MS = 280
         const val SHEET_EXIT_DURATION_MS = 180
         const val SHEET_ENTER_OFFSET_PX = 220
+        const val DETAIL_EXIT_DURATION_MS = 240
     }
 
     companion object {
@@ -142,6 +145,7 @@ class TaskEditorGlobalOverlay(
 
     private sealed interface OverlayRoute {
         data object ActionList : OverlayRoute
+        data object FlowManager : OverlayRoute
 
         data class NodeEditor(
             val nodeId: String,
@@ -411,6 +415,14 @@ class TaskEditorGlobalOverlay(
         touchEditor()
     }
 
+    private fun dismissByBackdrop() {
+        if (routeStack.size > 1) {
+            popRoute()
+        } else {
+            hide()
+        }
+    }
+
     private fun popToRouteDepth(targetDepth: Int) {
         val maxDepth = routeStack.lastIndex
         if (maxDepth <= 0) {
@@ -443,6 +455,11 @@ class TaskEditorGlobalOverlay(
             when (route) {
                 OverlayRoute.ActionList -> breadcrumbs += BreadcrumbItem(
                     label = "动作列表",
+                    routeDepth = index,
+                )
+
+                OverlayRoute.FlowManager -> breadcrumbs += BreadcrumbItem(
+                    label = "流程管理",
                     routeDepth = index,
                 )
 
@@ -514,8 +531,12 @@ class TaskEditorGlobalOverlay(
         val editingNodeId = (currentRoute as? OverlayRoute.NodeEditor)?.nodeId
         val breadcrumbs = buildBreadcrumbs(taskName = task.name, state = state)
         var sheetVisible by remember(task.taskId) { mutableStateOf(false) }
+        var activeDetailRoute by remember(task.taskId) { mutableStateOf<OverlayRoute?>(null) }
+        var detailLayerVisible by remember(task.taskId) { mutableStateOf(false) }
         LaunchedEffect(task.taskId) {
             sheetVisible = false
+            activeDetailRoute = null
+            detailLayerVisible = false
             delay(16)
             if (overlayVisible) {
                 sheetVisible = true
@@ -526,6 +547,22 @@ class TaskEditorGlobalOverlay(
                 sheetVisible = false
             } else {
                 sheetVisible = true
+            }
+        }
+        LaunchedEffect(currentRoute) {
+            if (currentRoute == OverlayRoute.ActionList) {
+                detailLayerVisible = false
+            } else {
+                activeDetailRoute = currentRoute
+                detailLayerVisible = true
+            }
+        }
+        LaunchedEffect(detailLayerVisible, activeDetailRoute) {
+            if (!detailLayerVisible && activeDetailRoute != null) {
+                delay(OverlayMotion.DETAIL_EXIT_DURATION_MS.toLong())
+                if (!detailLayerVisible) {
+                    activeDetailRoute = null
+                }
             }
         }
         val scrimAlpha by animateFloatAsState(
@@ -551,7 +588,7 @@ class TaskEditorGlobalOverlay(
                     detectTapGestures(
                         onTap = {
                             if (overlayVisible) {
-                                hide()
+                                dismissByBackdrop()
                             }
                         },
                     )
@@ -600,15 +637,15 @@ class TaskEditorGlobalOverlay(
                             onClick = {},
                         ),
                 ) {
-                    val detailVisible = editingNodeId != null
+                    val detailVisible = detailLayerVisible
                     val baseScale by animateFloatAsState(
                         targetValue = if (detailVisible) 0.965f else 1f,
-                        animationSpec = tween(durationMillis = 260, easing = FastOutSlowInEasing),
+                        animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
                         label = "stack_base_scale",
                     )
                     val baseDimAlpha by animateFloatAsState(
                         targetValue = if (detailVisible) 0.1f else 0f,
-                        animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
+                        animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
                         label = "stack_base_dim",
                     )
                     Box(
@@ -637,6 +674,9 @@ class TaskEditorGlobalOverlay(
                                 store.selectNode(nodeId)
                                 pushRoute(OverlayRoute.NodeEditor(nodeId))
                             },
+                            onOpenFlowManager = {
+                                pushRoute(OverlayRoute.FlowManager)
+                            },
                             onNavigateByBreadcrumb = { depth ->
                                 popToRouteDepth(depth)
                             },
@@ -652,18 +692,24 @@ class TaskEditorGlobalOverlay(
                     }
 
                     AnimatedVisibility(
-                        visible = detailVisible,
+                        visible = detailLayerVisible && activeDetailRoute != null,
                         enter = fadeIn(
-                            animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
+                            animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
                         ) + slideInVertically(
-                            animationSpec = tween(durationMillis = 280, easing = FastOutSlowInEasing),
-                            initialOffsetY = { fullHeight -> fullHeight / 4 },
+                            animationSpec = spring(
+                                dampingRatio = 0.9f,
+                                stiffness = Spring.StiffnessLow,
+                            ),
+                            initialOffsetY = { fullHeight -> (fullHeight * 0.22f).roundToInt() },
                         ),
                         exit = fadeOut(
-                            animationSpec = tween(durationMillis = 140, easing = FastOutSlowInEasing),
-                        ) + slideOutVertically(
                             animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
-                            targetOffsetY = { fullHeight -> fullHeight / 5 },
+                        ) + slideOutVertically(
+                            animationSpec = spring(
+                                dampingRatio = 0.95f,
+                                stiffness = Spring.StiffnessMediumLow,
+                            ),
+                            targetOffsetY = { fullHeight -> (fullHeight * 0.18f).roundToInt() },
                         ),
                         modifier = Modifier.fillMaxSize(),
                     ) {
@@ -676,71 +722,156 @@ class TaskEditorGlobalOverlay(
                                     onClick = {},
                                 ),
                         ) {
-                            NodeEditScreen(
-                                breadcrumbs = breadcrumbs,
-                                state = state,
-                                scaffoldModifier = Modifier
-                                    .fillMaxSize()
-                                    .padding(top = 20.dp),
-                                onBack = {
-                                    popRoute()
-                                },
-                                onNavigateByBreadcrumb = { depth ->
-                                    popToRouteDepth(depth)
-                                },
-                                onClose = { hide() },
-                                onDelete = {
-                                    mutateStore("已删除动作") {
-                                        it.removeSelectedNode()
-                                    }
-                                    popRoute()
-                                },
-                                onSave = {
-                                    persistCurrentTask("已保存")
-                                },
-                                onDone = {
-                                    popRoute()
-                                },
-                                onUpdateNodeKind = { kind ->
-                                    val editingId = editingNodeId
-                                    mutateStore("已切换 kind=$kind") {
-                                        it.updateSelectedNodeKind(kind)
-                                        if (kind != NodeKind.ACTION && editingId != null) {
-                                            it.selectNode(editingId)
-                                        }
-                                    }
-                                },
-                                onUpdateActionType = { actionType ->
-                                    mutateStore("已切换 actionType=${actionType.raw}") {
-                                        it.updateSelectedNodeActionType(actionType)
-                                    }
-                                },
-                                onUpdateEnabled = { enabled ->
-                                    mutateStore("已更新 enabled=$enabled") {
-                                        it.updateSelectedNodeEnabled(enabled)
-                                    }
-                                },
-                                onUpdateActive = { active ->
-                                    mutateStore("已更新 active=$active") {
-                                        it.updateSelectedNodeActive(active)
-                                    }
-                                },
-                                onUpdateParam = { key, value ->
-                                    mutateStore("已设置 $key=$value") {
-                                        it.updateSelectedNodeParam(key, value)
-                                    }
-                                },
-                                onFillDefaults = {
-                                    mutateStore("已填充默认参数") {
-                                        it.fillDefaultsForSelectedNode()
-                                    }
-                                },
-                                onUpdateBranchTarget = { condition, selectedTargetNodeId ->
-                                    mutateStore("已设置 ${condition.name}=$selectedTargetNodeId") {
-                                        it.updateSelectedBranchTarget(condition, selectedTargetNodeId)
-                                    }
-                                },
-                            )
+                            when (val displayedRoute = activeDetailRoute) {
+                                null,
+                                OverlayRoute.ActionList,
+                                -> Unit
+                                OverlayRoute.FlowManager -> {
+                                    FlowManagerScreen(
+                                        breadcrumbs = breadcrumbs,
+                                        state = state,
+                                        scaffoldModifier = Modifier
+                                            .fillMaxSize()
+                                            .padding(top = 20.dp),
+                                        onBack = { popRoute() },
+                                        onNavigateByBreadcrumb = { depth ->
+                                            popToRouteDepth(depth)
+                                        },
+                                        onClose = { hide() },
+                                        onSelectFlow = { flowId ->
+                                            store.selectFlow(flowId)
+                                            touchEditor()
+                                        },
+                                        onSetEntryNode = { nodeId ->
+                                            mutateStore("已设置入口节点=$nodeId") {
+                                                it.setSelectedFlowEntryNode(nodeId)
+                                            }
+                                        },
+                                        onRenameFlow = { flowName ->
+                                            mutateStore("已重命名流程") {
+                                                it.renameSelectedFlow(flowName)
+                                            }
+                                        },
+                                        onAddFlow = { flowName ->
+                                            mutateStore("已新增流程") {
+                                                it.addFlow(flowName)
+                                            }
+                                        },
+                                        onDeleteFlow = {
+                                            when (val result = store.deleteSelectedFlow()) {
+                                                TaskGraphEditorStore.DeleteSelectedFlowResult.Success -> {
+                                                    statusText = "已删除流程"
+                                                    touchEditor()
+                                                    persistCurrentTask("已删除流程")
+                                                    popRoute()
+                                                }
+
+                                                TaskGraphEditorStore.DeleteSelectedFlowResult.LastFlowBlocked -> {
+                                                    statusText = "删除失败：至少保留一个流程"
+                                                    touchEditor()
+                                                }
+
+                                                TaskGraphEditorStore.DeleteSelectedFlowResult.NotFound -> {
+                                                    statusText = "删除失败：当前流程不存在"
+                                                    touchEditor()
+                                                }
+
+                                                is TaskGraphEditorStore.DeleteSelectedFlowResult.Referenced -> {
+                                                    val preview = result.references
+                                                        .take(3)
+                                                        .joinToString(",") { "${it.flowId}/${it.nodeId}" }
+                                                    val suffix = if (result.references.size > 3) {
+                                                        "..."
+                                                    } else {
+                                                        ""
+                                                    }
+                                                    statusText = "删除失败：被引用于 $preview$suffix"
+                                                    touchEditor()
+                                                }
+                                            }
+                                        },
+                                    )
+                                }
+
+                                is OverlayRoute.NodeEditor -> {
+                                    NodeEditScreen(
+                                        breadcrumbs = breadcrumbs,
+                                        state = state,
+                                        scaffoldModifier = Modifier
+                                            .fillMaxSize()
+                                            .padding(top = 20.dp),
+                                        onBack = {
+                                            popRoute()
+                                        },
+                                        onNavigateByBreadcrumb = { depth ->
+                                            popToRouteDepth(depth)
+                                        },
+                                        onClose = { hide() },
+                                        onDelete = {
+                                            mutateStore("已删除动作") {
+                                                it.removeSelectedNode()
+                                            }
+                                            popRoute()
+                                        },
+                                        onSave = {
+                                            persistCurrentTask("已保存")
+                                        },
+                                        onDone = {
+                                            popRoute()
+                                        },
+                                        onUpdateNodeKind = { kind ->
+                                            val selectedRouteNodeId = displayedRoute.nodeId
+                                            mutateStore("已切换 kind=$kind") {
+                                                it.updateSelectedNodeKind(kind)
+                                                if (kind != NodeKind.ACTION) {
+                                                    it.selectNode(selectedRouteNodeId)
+                                                }
+                                            }
+                                        },
+                                        onUpdateActionType = { actionType ->
+                                            mutateStore("已切换 actionType=${actionType.raw}") {
+                                                it.updateSelectedNodeActionType(actionType)
+                                            }
+                                        },
+                                        onUpdateEnabled = { enabled ->
+                                            mutateStore("已更新 enabled=$enabled") {
+                                                it.updateSelectedNodeEnabled(enabled)
+                                            }
+                                        },
+                                        onUpdateActive = { active ->
+                                            mutateStore("已更新 active=$active") {
+                                                it.updateSelectedNodeActive(active)
+                                            }
+                                        },
+                                        onUpdateParam = { key, value ->
+                                            mutateStore("已设置 $key=$value") {
+                                                it.updateSelectedNodeParam(key, value)
+                                            }
+                                        },
+                                        onRepairJumpTarget = {
+                                            mutateStore("已修复跳转目标") {
+                                                val current = it.state()
+                                                val fallbackFlowId = current.selectedFlowId
+                                                val fallbackNodeId = current.selectedFlow?.entryNodeId
+                                                    ?: current.selectedNodeId
+                                                    ?: "start"
+                                                it.updateSelectedNodeParam("targetFlowId", fallbackFlowId)
+                                                it.updateSelectedNodeParam("targetNodeId", fallbackNodeId)
+                                            }
+                                        },
+                                        onFillDefaults = {
+                                            mutateStore("已填充默认参数") {
+                                                it.fillDefaultsForSelectedNode()
+                                            }
+                                        },
+                                        onUpdateBranchTarget = { condition, selectedTargetNodeId ->
+                                            mutateStore("已设置 ${condition.name}=$selectedTargetNodeId") {
+                                                it.updateSelectedBranchTarget(condition, selectedTargetNodeId)
+                                            }
+                                        },
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -757,6 +888,7 @@ class TaskEditorGlobalOverlay(
         onTogglePreview: () -> Unit,
         onSave: () -> Unit,
         onEditNode: (String) -> Unit,
+        onOpenFlowManager: () -> Unit,
         onNavigateByBreadcrumb: (Int) -> Unit,
         onClose: () -> Unit,
     ) {
@@ -768,6 +900,11 @@ class TaskEditorGlobalOverlay(
             breadcrumbs = breadcrumbs,
             onBreadcrumbNavigate = onNavigateByBreadcrumb,
             headerActions = listOf(
+                OverlayAction(
+                    text = "流程",
+                    style = OverlayButtonStyle.OUTLINE,
+                    onClick = onOpenFlowManager,
+                ),
                 OverlayAction(
                     text = if (previewVisible) "隐藏预览" else "查看预览",
                     style = if (previewVisible) OverlayButtonStyle.SOLID else OverlayButtonStyle.OUTLINE,
@@ -821,11 +958,126 @@ class TaskEditorGlobalOverlay(
                     flow = flow,
                     actionNodes = actionNodes,
                     onEditNode = onEditNode,
+                    onOpenJumpTarget = { targetNodeId ->
+                        onEditNode(targetNodeId)
+                        statusText = "已定位跳转目标: $targetNodeId"
+                        touchEditor()
+                    },
                 )
             }
 
             if (statusText.isNotBlank()) {
                 Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = statusText,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+
+    @Composable
+    private fun FlowManagerScreen(
+        breadcrumbs: List<BreadcrumbItem>,
+        state: TaskGraphEditorState,
+        scaffoldModifier: Modifier = Modifier,
+        onBack: () -> Unit,
+        onNavigateByBreadcrumb: (Int) -> Unit,
+        onClose: () -> Unit,
+        onSelectFlow: (String) -> Unit,
+        onSetEntryNode: (String) -> Unit,
+        onRenameFlow: (String) -> Unit,
+        onAddFlow: (String) -> Unit,
+        onDeleteFlow: () -> Unit,
+    ) {
+        val selectedFlow = state.selectedFlow
+        var newFlowName by remember(state.bundle.flows.size) { mutableStateOf("") }
+        var renameFlowName by remember(selectedFlow?.flowId, selectedFlow?.name) {
+            mutableStateOf(selectedFlow?.name.orEmpty())
+        }
+        LaunchedEffect(selectedFlow?.flowId, selectedFlow?.name) {
+            renameFlowName = selectedFlow?.name.orEmpty()
+        }
+
+        OverlayDialogScaffold(
+            title = "流程管理",
+            showBack = true,
+            breadcrumbs = breadcrumbs,
+            onBreadcrumbNavigate = onNavigateByBreadcrumb,
+            modifier = scaffoldModifier,
+            footerActions = listOf(
+                OverlayAction("删除当前流程", style = OverlayButtonStyle.TONAL, onClick = onDeleteFlow),
+                OverlayAction("完成", style = OverlayButtonStyle.SOLID, onClick = onBack),
+            ),
+            onBack = onBack,
+            onClose = onClose,
+        ) {
+            SectionTitle("当前流程")
+            Text(
+                text = "selected=${state.selectedFlowId}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            OptionButtons(
+                options = state.bundle.flows.map { it.flowId },
+                selected = state.selectedFlowId,
+                onSelect = onSelectFlow,
+            )
+
+            if (selectedFlow != null) {
+                SectionTitle("流程名称")
+                OutlinedTextField(
+                    value = renameFlowName,
+                    onValueChange = { renameFlowName = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("flow.name") },
+                    singleLine = true,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    DialogButton(
+                        text = "保存名称",
+                        style = OverlayButtonStyle.OUTLINE,
+                        modifier = Modifier.weight(1f),
+                        onClick = { onRenameFlow(renameFlowName) },
+                    )
+                }
+
+                SectionTitle("入口节点")
+                OptionButtons(
+                    options = selectedFlow.nodes.map { it.nodeId },
+                    selected = selectedFlow.entryNodeId,
+                    onSelect = onSetEntryNode,
+                )
+            }
+
+            SectionTitle("新增流程")
+            OutlinedTextField(
+                value = newFlowName,
+                onValueChange = { newFlowName = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("new flow name") },
+                singleLine = true,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                DialogButton(
+                    text = "新增流程",
+                    style = OverlayButtonStyle.SOLID,
+                    modifier = Modifier.weight(1f),
+                    onClick = {
+                        onAddFlow(newFlowName)
+                        newFlowName = ""
+                    },
+                )
+            }
+
+            if (statusText.isNotBlank()) {
                 Text(
                     text = statusText,
                     style = MaterialTheme.typography.bodySmall,
@@ -851,6 +1103,7 @@ class TaskEditorGlobalOverlay(
         onUpdateEnabled: (Boolean) -> Unit,
         onUpdateActive: (Boolean) -> Unit,
         onUpdateParam: (String, String) -> Unit,
+        onRepairJumpTarget: () -> Unit,
         onFillDefaults: () -> Unit,
         onUpdateBranchTarget: (EdgeConditionType, String) -> Unit,
     ) {
@@ -875,6 +1128,8 @@ class TaskEditorGlobalOverlay(
         val targetFlowId = node.params["targetFlowId"]?.toString()?.takeIf { it.isNotBlank() } ?: state.selectedFlowId
         val targetNodeId = node.params["targetNodeId"]?.toString().orEmpty()
         val targetFlow = state.bundle.findFlow(targetFlowId)
+        var flowFilter by remember(node.nodeId) { mutableStateOf("") }
+        var nodeFilter by remember(node.nodeId, targetFlowId) { mutableStateOf("") }
 
         OverlayDialogScaffold(
             title = "编辑动作: ${node.nodeId}",
@@ -928,20 +1183,58 @@ class TaskEditorGlobalOverlay(
 
             if (isJumpLike) {
                 SectionTitle("Jump Target Flow")
+                OutlinedTextField(
+                    value = flowFilter,
+                    onValueChange = { flowFilter = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("筛选流程") },
+                    singleLine = true,
+                )
+                val flowOptions = state.bundle.flows
+                    .map { it.flowId }
+                    .filter {
+                        flowFilter.isBlank() || it.contains(flowFilter, ignoreCase = true)
+                    }
                 OptionButtons(
-                    options = state.bundle.flows.map { it.flowId },
+                    options = flowOptions,
                     selected = targetFlowId,
                     onSelect = { onUpdateParam("targetFlowId", it) },
                 )
                 SectionTitle("Jump Target Node")
+                OutlinedTextField(
+                    value = nodeFilter,
+                    onValueChange = { nodeFilter = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("筛选节点") },
+                    singleLine = true,
+                )
+                val nodeOptions = targetFlow?.nodes
+                    ?.asSequence()
+                    ?.filter { it.kind != NodeKind.START }
+                    ?.map { it.nodeId }
+                    ?.filter {
+                        nodeFilter.isBlank() || it.contains(nodeFilter, ignoreCase = true)
+                    }
+                    ?.toList()
+                    ?: emptyList()
                 OptionButtons(
-                    options = targetFlow?.nodes
-                        ?.filter { it.kind != NodeKind.START }
-                        ?.map { it.nodeId }
-                        ?: emptyList(),
+                    options = nodeOptions,
                     selected = targetNodeId,
                     onSelect = { onUpdateParam("targetNodeId", it) },
                 )
+                val jumpTargetValid = targetNodeId.isNotBlank() && targetFlow?.findNode(targetNodeId) != null
+                if (!jumpTargetValid) {
+                    Text(
+                        text = "当前跳转目标无效：$targetFlowId/$targetNodeId",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    DialogButton(
+                        text = "修复为当前流程入口",
+                        style = OverlayButtonStyle.TONAL,
+                        onClick = onRepairJumpTarget,
+                    )
+                }
             }
 
             if (node.kind == NodeKind.BRANCH) {
@@ -1302,6 +1595,7 @@ class TaskEditorGlobalOverlay(
         flow: TaskFlow,
         actionNodes: List<FlowNode>,
         onEditNode: (String) -> Unit,
+        onOpenJumpTarget: (String) -> Unit,
     ) {
         val rowCenters = remember(flow.flowId, actionNodes.map { it.nodeId }) {
             mutableStateMapOf<String, Float>()
@@ -1341,6 +1635,7 @@ class TaskEditorGlobalOverlay(
                 JumpConnectionCanvas(
                     rowCenters = rowCenters,
                     connections = jumpConnections,
+                    onConnectionTap = onOpenJumpTarget,
                     modifier = Modifier.matchParentSize(),
                 )
             }
@@ -1351,10 +1646,50 @@ class TaskEditorGlobalOverlay(
     private fun JumpConnectionCanvas(
         rowCenters: SnapshotStateMap<String, Float>,
         connections: List<Pair<String, String>>,
+        onConnectionTap: (String) -> Unit,
         modifier: Modifier = Modifier,
     ) {
         val paintColor = MaterialTheme.colorScheme.primary
-        Canvas(modifier = modifier) {
+        Canvas(
+            modifier = modifier.pointerInput(rowCenters.toMap(), connections) {
+                detectTapGestures { tapOffset ->
+                    val startX = size.width - 82.dp.toPx()
+                    val midX = size.width - 30.dp.toPx()
+                    val endX = size.width - 20.dp.toPx()
+                    val thresholdPx = 14.dp.toPx()
+                    val thresholdSq = thresholdPx * thresholdPx
+                    var bestMatchTarget: String? = null
+                    var bestMatchDistSq = Float.MAX_VALUE
+                    connections.forEach { (fromId, toId) ->
+                        val fromY = rowCenters[fromId] ?: return@forEach
+                        val toY = rowCenters[toId] ?: return@forEach
+                        val d1 = distanceSquaredToSegment(
+                            point = tapOffset,
+                            a = Offset(startX, fromY),
+                            b = Offset(midX, fromY),
+                        )
+                        val d2 = distanceSquaredToSegment(
+                            point = tapOffset,
+                            a = Offset(midX, fromY),
+                            b = Offset(midX, toY),
+                        )
+                        val d3 = distanceSquaredToSegment(
+                            point = tapOffset,
+                            a = Offset(midX, toY),
+                            b = Offset(endX, toY),
+                        )
+                        val nearest = minOf(d1, d2, d3)
+                        if (nearest < bestMatchDistSq) {
+                            bestMatchDistSq = nearest
+                            bestMatchTarget = toId
+                        }
+                    }
+                    if (bestMatchDistSq <= thresholdSq) {
+                        bestMatchTarget?.let(onConnectionTap)
+                    }
+                }
+            },
+        ) {
             val startX = size.width - 82.dp.toPx()
             val midX = size.width - 30.dp.toPx()
             val endX = size.width - 20.dp.toPx()
@@ -1389,6 +1724,29 @@ class TaskEditorGlobalOverlay(
                 drawCircle(color = paintColor, radius = 2.dp.toPx(), center = Offset(endX, toY))
             }
         }
+    }
+
+    private fun distanceSquaredToSegment(
+        point: Offset,
+        a: Offset,
+        b: Offset,
+    ): Float {
+        val abX = b.x - a.x
+        val abY = b.y - a.y
+        val apX = point.x - a.x
+        val apY = point.y - a.y
+        val abLenSq = abX * abX + abY * abY
+        if (abLenSq <= 0f) {
+            val dx = point.x - a.x
+            val dy = point.y - a.y
+            return dx * dx + dy * dy
+        }
+        val t = ((apX * abX + apY * abY) / abLenSq).coerceIn(0f, 1f)
+        val projectionX = a.x + t * abX
+        val projectionY = a.y + t * abY
+        val dx = point.x - projectionX
+        val dy = point.y - projectionY
+        return dx * dx + dy * dy
     }
 
     @Composable

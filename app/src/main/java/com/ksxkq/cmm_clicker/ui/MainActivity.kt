@@ -94,6 +94,12 @@ private enum class HomePageMode(val label: String) {
     CONSOLE("控制台"),
 }
 
+private enum class TaskListSortMode(val label: String) {
+    UPDATED_DESC("最近更新"),
+    LAST_RUN_DESC("最近运行"),
+    NAME_ASC("名称 A-Z"),
+}
+
 class MainActivity : ComponentActivity() {
     private val themePreferenceStore by lazy { ThemePreferenceStore(applicationContext) }
     private val taskRepository by lazy { LocalFileTaskRepository(applicationContext) }
@@ -726,6 +732,23 @@ private fun TaskListPanel(
     val selectedTask = tasks.firstOrNull { it.taskId == selectedTaskId }
     var newTaskName by remember { mutableStateOf("") }
     var renameTaskName by remember { mutableStateOf("") }
+    var searchKeyword by remember { mutableStateOf("") }
+    var sortMode by remember { mutableStateOf(TaskListSortMode.UPDATED_DESC) }
+    var pendingDeleteTaskId by remember { mutableStateOf<String?>(null) }
+    val trimmedKeyword = searchKeyword.trim()
+    val filteredTasks = remember(tasks, trimmedKeyword, sortMode) {
+        val matched = tasks.filter { task ->
+            trimmedKeyword.isBlank() ||
+                task.name.contains(trimmedKeyword, ignoreCase = true) ||
+                task.taskId.contains(trimmedKeyword, ignoreCase = true)
+        }
+        when (sortMode) {
+            TaskListSortMode.UPDATED_DESC -> matched.sortedByDescending { it.updatedAtEpochMs }
+            TaskListSortMode.LAST_RUN_DESC -> matched.sortedByDescending { it.lastRunAtEpochMs ?: -1L }
+            TaskListSortMode.NAME_ASC -> matched.sortedBy { it.name.lowercase(Locale.ROOT) }
+        }
+    }
+    val deleteCandidate = tasks.firstOrNull { it.taskId == pendingDeleteTaskId }
     LaunchedEffect(selectedTaskId, selectedTask?.name) {
         renameTaskName = selectedTask?.name.orEmpty()
     }
@@ -770,7 +793,7 @@ private fun TaskListPanel(
                 ActionButton(
                     text = "删除任务",
                     modifier = Modifier.weight(1f),
-                    onClick = { onDeleteTask(selectedTask.taskId) },
+                    onClick = { pendingDeleteTaskId = selectedTask.taskId },
                 )
             }
         }
@@ -783,15 +806,52 @@ private fun TaskListPanel(
         }
     }
 
-    SectionCard(title = "任务列表", subtitle = "共 ${tasks.size} 个") {
-        if (tasks.isEmpty()) {
+    SectionCard(
+        title = "任务列表",
+        subtitle = if (trimmedKeyword.isBlank()) {
+            "共 ${tasks.size} 个"
+        } else {
+            "匹配 ${filteredTasks.size} / ${tasks.size}"
+        },
+    ) {
+        OutlinedTextField(
+            value = searchKeyword,
+            onValueChange = { searchKeyword = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("搜索任务（名称或 ID）") },
+            singleLine = true,
+        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            TaskListSortMode.entries.forEach { mode ->
+                if (mode == sortMode) {
+                    Button(onClick = { sortMode = mode }) {
+                        Text(mode.label)
+                    }
+                } else {
+                    OutlinedButton(onClick = { sortMode = mode }) {
+                        Text(mode.label)
+                    }
+                }
+            }
+        }
+
+        if (filteredTasks.isEmpty()) {
             Text(
-                text = "暂无任务，请先新建",
+                text = if (tasks.isEmpty()) {
+                    "暂无任务，请先新建"
+                } else {
+                    "没有匹配任务，请调整搜索条件"
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         } else {
-            tasks.forEach { task ->
+            filteredTasks.forEach { task ->
                 val isSelected = task.taskId == selectedTaskId
                 Column(
                     modifier = Modifier.fillMaxWidth(),
@@ -841,6 +901,66 @@ private fun TaskListPanel(
                             enabled = !running,
                             onClick = { onRunTask(task.taskId) },
                         )
+                    }
+                }
+            }
+        }
+    }
+
+    if (deleteCandidate != null) {
+        DeleteTaskConfirmDialog(
+            taskName = deleteCandidate.name,
+            onCancel = { pendingDeleteTaskId = null },
+            onConfirm = {
+                onDeleteTask(deleteCandidate.taskId)
+                pendingDeleteTaskId = null
+            },
+        )
+    }
+}
+
+@Composable
+private fun DeleteTaskConfirmDialog(
+    taskName: String,
+    onCancel: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    Dialog(onDismissRequest = onCancel) {
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text(
+                    text = "确认删除任务",
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    text = "将删除任务：$taskName",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    ActionButton(
+                        text = "取消",
+                        modifier = Modifier.weight(1f),
+                        onClick = onCancel,
+                    )
+                    Button(
+                        modifier = Modifier.weight(1f),
+                        onClick = onConfirm,
+                    ) {
+                        Text("确认删除")
                     }
                 }
             }

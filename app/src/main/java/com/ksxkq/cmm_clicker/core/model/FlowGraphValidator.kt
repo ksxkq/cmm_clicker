@@ -156,8 +156,10 @@ class FlowGraphValidator {
     }
 
     private fun parseTargetPointer(node: FlowNode, defaultFlowId: String): NodePointer? {
-        val targetNodeId = node.params["targetNodeId"] as? String ?: return null
-        val targetFlowId = node.params["targetFlowId"] as? String ?: defaultFlowId
+        val targetNodeId = node.params["targetNodeId"]?.toString()?.trim().orEmpty()
+        val targetFlowId = node.params["targetFlowId"]?.toString()?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?: defaultFlowId
         if (targetFlowId.isBlank() || targetNodeId.isBlank()) {
             return null
         }

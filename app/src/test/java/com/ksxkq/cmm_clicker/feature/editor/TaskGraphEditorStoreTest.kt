@@ -119,4 +119,41 @@ class TaskGraphEditorStoreTest {
         assertEquals("0.5", clickNode.params["x"])
         assertEquals("60", clickNode.params["durationMs"])
     }
+
+    @Test
+    fun flowCrud_shouldSupportAddRenameAndEntrySwitch() {
+        val store = TaskGraphEditorStore(
+            initialBundle = SampleFlowBundleFactory.createSimpleDemoBundle(),
+        )
+        val createdFlowId = store.addFlow("测试流程")
+        val created = store.state().bundle.findFlow(createdFlowId)
+        assertNotNull(created)
+        assertEquals(createdFlowId, store.state().selectedFlowId)
+        assertEquals("测试流程", created!!.name)
+        assertEquals("start", created.entryNodeId)
+
+        store.renameSelectedFlow("测试流程-重命名")
+        val renamed = store.state().bundle.findFlow(createdFlowId)
+        assertEquals("测试流程-重命名", renamed!!.name)
+
+        assertTrue(store.setSelectedFlowEntryNode("end"))
+        val updatedEntry = store.state().bundle.findFlow(createdFlowId)
+        assertEquals("end", updatedEntry!!.entryNodeId)
+    }
+
+    @Test
+    fun deleteFlow_shouldRejectWhenReferencedOrSingleFlow() {
+        val store = TaskGraphEditorStore(
+            initialBundle = SampleFlowBundleFactory.createSimpleDemoBundle(),
+        )
+        store.selectFlow("sub")
+        val referenced = store.deleteSelectedFlow()
+        assertTrue(referenced is TaskGraphEditorStore.DeleteSelectedFlowResult.Referenced)
+
+        val tempFlowId = store.addFlow("临时流程")
+        store.selectFlow(tempFlowId)
+        val deleted = store.deleteSelectedFlow()
+        assertTrue(deleted is TaskGraphEditorStore.DeleteSelectedFlowResult.Success)
+        assertTrue(store.state().bundle.findFlow(tempFlowId) == null)
+    }
 }

@@ -7,6 +7,7 @@ import com.ksxkq.cmm_clicker.core.model.FlowGraphValidator
 import com.ksxkq.cmm_clicker.core.model.FlowNode
 import com.ksxkq.cmm_clicker.core.model.GraphValidationIssue
 import com.ksxkq.cmm_clicker.core.model.NodeKind
+import com.ksxkq.cmm_clicker.core.model.NodePointer
 import com.ksxkq.cmm_clicker.core.model.TaskBundle
 import com.ksxkq.cmm_clicker.core.model.TaskFlow
 
@@ -26,10 +27,23 @@ class TaskGraphEditorStore(
     initialBundle: TaskBundle,
     private val validator: FlowGraphValidator = FlowGraphValidator(),
 ) {
+    sealed interface DeleteSelectedFlowResult {
+        data object Success : DeleteSelectedFlowResult
+
+        data object LastFlowBlocked : DeleteSelectedFlowResult
+
+        data object NotFound : DeleteSelectedFlowResult
+
+        data class Referenced(
+            val references: List<NodePointer>,
+        ) : DeleteSelectedFlowResult
+    }
+
     private data class Snapshot(
         val bundle: TaskBundle,
         val selectedFlowId: String,
         val selectedNodeId: String?,
+        val nextFlowSerial: Int,
         val nextNodeSerial: Int,
         val nextEdgeSerial: Int,
     )
@@ -39,6 +53,7 @@ class TaskGraphEditorStore(
         ?: initialBundle.flows.firstOrNull()?.flowId
         ?: ""
     private var selectedNodeId: String? = initialBundle.findFlow(selectedFlowId)?.entryNodeId
+    private var nextFlowSerial: Int = detectNextFlowSerial(initialBundle)
     private var nextNodeSerial: Int = detectNextNodeSerial(initialBundle)
     private var nextEdgeSerial: Int = detectNextEdgeSerial(initialBundle)
     private val undoStack = ArrayDeque<Snapshot>()
@@ -61,6 +76,7 @@ class TaskGraphEditorStore(
             ?: newBundle.flows.firstOrNull()?.flowId
             ?: ""
         selectedNodeId = newBundle.findFlow(selectedFlowId)?.entryNodeId
+        nextFlowSerial = detectNextFlowSerial(newBundle)
         nextNodeSerial = detectNextNodeSerial(newBundle)
         nextEdgeSerial = detectNextEdgeSerial(newBundle)
         undoStack.clear()
@@ -87,6 +103,86 @@ class TaskGraphEditorStore(
         mutate {
             bundle = bundle.copy(name = name.ifBlank { bundle.name })
         }
+    }
+
+    fun addFlow(name: String): String {
+        val flowId = generateFlowId()
+        val flowName = name.ifBlank { "流程 ${bundle.flows.size + 1}" }
+        val edgeId = generateGlobalEdgeId()
+        val newFlow = TaskFlow(
+            flowId = flowId,
+            name = flowName,
+            entryNodeId = "start",
+            nodes = listOf(
+                FlowNode(nodeId = "start", kind = NodeKind.START),
+                FlowNode(nodeId = "end", kind = NodeKind.END),
+            ),
+            edges = listOf(
+                FlowEdge(
+                    edgeId = edgeId,
+                    fromNodeId = "start",
+                    toNodeId = "end",
+                ),
+            ),
+        )
+        mutate {
+            bundle = bundle.copy(flows = bundle.flows + newFlow)
+            selectedFlowId = newFlow.flowId
+            selectedNodeId = newFlow.entryNodeId
+        }
+        return flowId
+    }
+
+    fun renameSelectedFlow(name: String) {
+        val flow = bundle.findFlow(selectedFlowId) ?: return
+        val nextName = name.trim().ifBlank { flow.name }
+        mutate {
+            val refreshedFlow = bundle.findFlow(selectedFlowId) ?: return@mutate
+            updateFlow(refreshedFlow.copy(name = nextName))
+        }
+    }
+
+    fun deleteSelectedFlow(): DeleteSelectedFlowResult {
+        val flowId = selectedFlowId
+        if (flowId.isBlank() || bundle.flows.size <= 1) {
+            return DeleteSelectedFlowResult.LastFlowBlocked
+        }
+        val targetFlow = bundle.findFlow(flowId) ?: return DeleteSelectedFlowResult.NotFound
+        val references = findFlowReferences(flowId = flowId)
+        if (references.isNotEmpty()) {
+            return DeleteSelectedFlowResult.Referenced(references)
+        }
+
+        val fallbackFlow = bundle.flows.firstOrNull { it.flowId != flowId }
+            ?: return DeleteSelectedFlowResult.NotFound
+        mutate {
+            val newFlows = bundle.flows.filterNot { it.flowId == targetFlow.flowId }
+            val newEntryFlowId = if (bundle.entryFlowId == targetFlow.flowId) {
+                fallbackFlow.flowId
+            } else {
+                bundle.entryFlowId
+            }
+            bundle = bundle.copy(
+                flows = newFlows,
+                entryFlowId = newEntryFlowId,
+            )
+            selectedFlowId = fallbackFlow.flowId
+            selectedNodeId = fallbackFlow.entryNodeId
+        }
+        return DeleteSelectedFlowResult.Success
+    }
+
+    fun setSelectedFlowEntryNode(nodeId: String): Boolean {
+        val flow = bundle.findFlow(selectedFlowId) ?: return false
+        if (flow.findNode(nodeId) == null) {
+            return false
+        }
+        mutate {
+            val refreshedFlow = bundle.findFlow(selectedFlowId) ?: return@mutate
+            updateFlow(refreshedFlow.copy(entryNodeId = nodeId))
+            selectedNodeId = nodeId
+        }
+        return true
     }
 
     fun addActionNode() {
@@ -375,6 +471,7 @@ class TaskGraphEditorStore(
             bundle = bundle,
             selectedFlowId = selectedFlowId,
             selectedNodeId = selectedNodeId,
+            nextFlowSerial = nextFlowSerial,
             nextNodeSerial = nextNodeSerial,
             nextEdgeSerial = nextEdgeSerial,
         )
@@ -384,6 +481,7 @@ class TaskGraphEditorStore(
         bundle = snapshot.bundle
         selectedFlowId = snapshot.selectedFlowId
         selectedNodeId = snapshot.selectedNodeId
+        nextFlowSerial = snapshot.nextFlowSerial
         nextNodeSerial = snapshot.nextNodeSerial
         nextEdgeSerial = snapshot.nextEdgeSerial
     }
@@ -408,6 +506,42 @@ class TaskGraphEditorStore(
         return candidate
     }
 
+    private fun generateFlowId(): String {
+        var candidate: String
+        do {
+            candidate = "flow_${nextFlowSerial++}"
+        } while (bundle.findFlow(candidate) != null)
+        return candidate
+    }
+
+    private fun findFlowReferences(flowId: String): List<NodePointer> {
+        return bundle.flows
+            .asSequence()
+            .filter { it.flowId != flowId }
+            .flatMap { flow ->
+                flow.nodes.asSequence().mapNotNull { node ->
+                    val kind = node.kind
+                    if (kind != NodeKind.JUMP && kind != NodeKind.FOLDER_REF && kind != NodeKind.SUB_TASK_REF) {
+                        return@mapNotNull null
+                    }
+                    if (node.params["targetFlowId"]?.toString() == flowId) {
+                        NodePointer(flowId = flow.flowId, nodeId = node.nodeId)
+                    } else {
+                        null
+                    }
+                }
+            }
+            .toList()
+    }
+
+    private fun generateGlobalEdgeId(): String {
+        var candidate: String
+        do {
+            candidate = "edge_${nextEdgeSerial++}"
+        } while (bundle.flows.any { flow -> flow.edges.any { it.edgeId == candidate } })
+        return candidate
+    }
+
     private fun generateEdgeId(flow: TaskFlow): String {
         var candidate: String
         do {
@@ -425,6 +559,19 @@ class TaskGraphEditorStore(
                     if (suffix > max) {
                         max = suffix
                     }
+                }
+            }
+        }
+        return max + 1
+    }
+
+    private fun detectNextFlowSerial(bundle: TaskBundle): Int {
+        var max = 0
+        bundle.flows.forEach { flow ->
+            if (flow.flowId.startsWith("flow_")) {
+                val suffix = flow.flowId.removePrefix("flow_").toIntOrNull() ?: 0
+                if (suffix > max) {
+                    max = suffix
                 }
             }
         }

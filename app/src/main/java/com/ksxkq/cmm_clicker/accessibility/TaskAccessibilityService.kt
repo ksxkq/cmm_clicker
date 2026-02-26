@@ -5,6 +5,10 @@ import android.graphics.PointF
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 
 class TaskAccessibilityService : AccessibilityService() {
     companion object {
@@ -50,6 +54,10 @@ class TaskAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
         instance = this
         gestureFeedbackOverlay = GestureFeedbackOverlay(this)
+        taskEditorGlobalOverlay = TaskEditorGlobalOverlay(
+            context = this,
+            scope = serviceScope,
+        )
         isConnected = true
         Log.d("TaskAccessibility", "onServiceConnected")
     }
@@ -68,8 +76,11 @@ class TaskAccessibilityService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        taskEditorGlobalOverlay?.hide(animate = false)
+        taskEditorGlobalOverlay = null
         gestureFeedbackOverlay?.dispose()
         gestureFeedbackOverlay = null
+        serviceScope.cancel()
         if (instance === this) {
             instance = null
         }
@@ -77,7 +88,9 @@ class TaskAccessibilityService : AccessibilityService() {
         super.onDestroy()
     }
 
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var gestureFeedbackOverlay: GestureFeedbackOverlay? = null
+    private var taskEditorGlobalOverlay: TaskEditorGlobalOverlay? = null
 
     fun showClickFeedback(x: Float, y: Float) {
         gestureFeedbackOverlay?.showClick(x = x, y = y)
@@ -94,5 +107,15 @@ class TaskAccessibilityService : AccessibilityService() {
 
     fun showPathFeedback(points: List<PointF>) {
         gestureFeedbackOverlay?.showPath(points = points)
+    }
+
+    fun showTaskEditorOverlay(taskId: String): Boolean {
+        val overlay = taskEditorGlobalOverlay ?: return false
+        overlay.show(taskId)
+        return true
+    }
+
+    fun hideTaskEditorOverlay() {
+        taskEditorGlobalOverlay?.hide()
     }
 }

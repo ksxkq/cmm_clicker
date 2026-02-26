@@ -41,21 +41,81 @@
 
 ### 2.5 开发流程治理（本次新增）
 
-1. 新增仓库级 `AGENTS.md`，固化“文档驱动开发 + 同步更新文档”规则。
+1. 新增仓库级 `AGENTS.md`（并补充 `AGENT.md` 入口文件），固化“文档驱动开发 + 同步更新文档”规则。
 2. 明确“实现完成后必须同步执行日志与领域文档”的完成标准。
+
+### 2.6 编辑器 MVP（本次新增）
+
+1. 新增 `TaskGraphEditorStore`，落地编辑器状态管理与 undo/redo。
+2. 页面增加 `控制台/编辑器` 双模式切换，编辑器可完成 flow/node 选择与基础属性编辑。
+3. 支持节点新增/删除/上下移动、kind/actionType/pluginId/flags/params 编辑。
+4. 新增校验面板，实时展示图结构问题。
+5. Jump 类节点新增目标选择器（flow/node 点选）。
+6. 节点列表新增 jump 目标摘要展示（`-> flow/node`）。
+7. Branch 节点支持 `variableKey`/`operator`/`expectedValue` 与 TRUE/FALSE 目标边编辑。
+8. 新增流程图预览（第一版），支持节点点击选中、相关边高亮、jump 虚线连线高亮。
+9. 参数编辑改为 schema 驱动：按节点类型显示字段，支持枚举按钮与数值键盘输入。
+10. 连线文本预览（边与 jump 引用）与运行按钮已接入当前编辑后的 bundle。
+11. 新增编辑器与 runtime 相关单测，覆盖新增节点、undo/redo、入口节点保护、branch/属性编辑链路。
+
+### 2.7 数据升级基础设施（本次新增）
+
+1. 新增 `BundleSchema.CURRENT_VERSION` 统一管理 schema 版本常量。
+2. 新增 `BundleMigrationEngine` 与迁移结果模型（状态、日志、错误信息）。
+3. 新增默认迁移链入口 `BundleMigrations.default()` 与 `v0 -> v1` 示例迁移 step。
+4. 新增迁移单测，覆盖：无需迁移、正常迁移、未来版本拒绝、迁移链缺失失败。
+
+### 2.8 任务真实操作体验（本次新增）
+
+1. 新增本地任务仓库 `LocalFileTaskRepository`，支持 JSON 持久化（任务重启可恢复）。
+2. 新增任务列表页：新建、选择、运行入口、重命名、复制、删除。
+3. 新建任务默认模板为 `start -> click -> end`（用于当前研发阶段快速起步）。
+4. 新增任务运行历史展示：`最近运行时间/状态/摘要`。
+5. 任务编辑改为浮窗链路：动作列表浮窗（默认简版）-> 动作编辑浮窗（参数详情）。
+6. 编辑器接入当前选中任务，支持“保存任务”按钮与编辑自动保存。
+7. 控制台运行入口由“运行测试流程”改为“运行当前选中任务”。
+8. 修复 kind 切换参数污染：`action -> jump/branch` 不再保留 click 参数，参数区与类型一致。
+9. 已落地“全局浮窗编辑器”（`TYPE_ACCESSIBILITY_OVERLAY`）：可在其它 App 页面直接编辑当前任务动作。
+10. 编辑器动作类型收敛为已实现集合（`click/dupClick/swipe/record/closeCurrentUI`），`jump` 统一通过 `kind=JUMP + targetFlowId/targetNodeId` 配置，避免误配。
+11. 全局浮窗新增公共弹窗容器（Dialog Scaffold）：统一头部标题/菜单 action/底部操作区，并支持按页面控制显示。
+12. 全局浮窗按钮统一使用 Material3 Compose 组件（黑白体系，主动作 `Button`、普通动作 `OutlinedButton`），样式与交互反馈复用应用主题。
+13. 全局浮窗预览新增图形化连线（普通边 + jump 虚线），并保留文本连线列表。
+14. 运行默认模式改为 `REAL`（`dryRun=false`），运行摘要增加“模式=REAL/DRY_RUN”字段，避免“完成但无动作”误判。
+15. 全局浮窗接入统一主题：读取 `ThemePreferenceStore` 的 `AppThemeMode`，通过 `CmmClickerTheme` 直接渲染 Compose UI。
+16. 主题令牌改为单一来源：新增 `AppThemeTokens`，Compose 首页与全局浮窗都从同一份 palette 取色。
+17. 动作列表新增 jump 连线预览（列表内虚线连接源动作与目标动作，限同 flow）。
+18. 修复手势反馈偏移：执行坐标改用真实屏幕尺寸，反馈层补齐系统栏偏移与 cutout 布局。
+19. 全局浮窗编辑器完成技术栈收敛：`TaskEditorGlobalOverlay` 从 View 控件实现迁移为 Compose 实现（WindowManager 仅作为系统窗口宿主）。
+20. 修复全局浮窗“可触摸但不可见”问题：浮窗窗口 `addView` 后再 `setContent`，补充硬件加速与窗口位置重置，降低 MIUI 设备上透明拦截层风险。
+21. 全局浮窗增加手动 `Recomposer` 驱动（`ComposeView.setParentCompositionContext(recomposer)`），规避部分 ROM 下自动 window recomposer 不启动导致的“窗口有触摸、无 Compose 内容”问题。
+22. 修复 `Recomposer` 崩溃：手动 recomposer 协程上下文改为 `Dispatchers.Main.immediate + AndroidUiDispatcher.Main`，补齐 `MonotonicFrameClock`，解决点击编辑时 `IllegalStateException`。
+23. 增加浮窗组合启动诊断：补充 `recomposer` 生命周期日志与 `createComposition()` 显式触发日志，用于定位“窗口已显示但 Compose 内容未渲染”的 ROM 兼容问题。
+24. 调整手动 `Recomposer` 线程上下文为 `AndroidUiDispatcher.CurrentThread`（并使用 `UNDISPATCHED` 启动）以匹配 Compose UI 推荐模型，新增 `compose monitor` 日志输出 `recomposerActive/currentState`。
+25. 新增组合进入诊断日志：在 `setContent` 顶层输出 `compose lambda entered` 与 `SideEffect` 提交日志，区分“组合未执行”和“组合执行但未绘制”两类问题。
+26. 修复服务浮窗生命周期事件顺序：不再提前设置 `RESUMED`，改为 `setContent/createComposition` 后再发送 `ON_START/ON_RESUME`，并将 `OverlayComposeOwner` 改为标准 lifecycle event 驱动（含 pause/stop/destroy）。
+27. 修复浮窗偶发崩溃 `no event up from DESTROYED`：在 `compose.post` 回调中增加 overlay/owner 存活校验，并为 `OverlayComposeOwner.start/resume/destroy` 增加 destroyed 防重入保护。
+28. 修复浮窗 owner 误销毁：移除 `ComposeView.doOnDetach` 里的立即 `owner.destroy()`，统一由 `removeOverlay()` 负责销毁，避免“窗口仍在但组合启动被误判为 disposed”。
+29. 浮窗交互升级为“弹窗化体验”：窗口改为全屏 overlay，禁用拖动；新增背景渐暗动画（scrim fade）与内容自底部上滑动画（sheet slide+fade）。
+30. “查看预览”按钮改为黑白统一样式（激活态主按钮、未激活态描边按钮），消除紫色风格漂移。
+31. 浮窗遮罩层修正：覆盖状态栏/刘海区域（`FLAG_LAYOUT_NO_LIMITS + SHORT_EDGES`），并移除调试灰底，改为真正半透明 scrim。
+32. 浮窗支持“点击内容外区域关闭”（遮罩点击关闭），符合常规弹窗交互预期。
+33. 浮窗关闭改为动画驱动：先执行背景淡出 + 面板下滑退出，再延迟 `removeView`，避免突兀消失。
+34. 修复遮罩点击实现对内容交互的副作用：内容面板改为“空白区消费点击但不拦截子按钮”，恢复“添加动作/编辑”等按钮可点击性。
+35. 修复弹窗入场动画丢失：恢复独立 `sheetVisible` 进场状态（初始 `false` -> 延迟切换 `true`），确保每次打开都执行上滑/淡入动画。
 
 ## 3. 正在进行
 
-1. 基于新主题系统，继续抽离可复用组件（状态条、动作按钮、配置项行）。
+1. 任务体验第一版可用性验证（任务列表、动作浮窗、运行联动）与交互细节打磨。
 2. 把“运行 trace 与错误码”沉淀为可导出日志结构，为调试面板打基础。
+3. 全局浮窗细节优化（更强的预览、布局与可达性，按钮尺寸与密度继续打磨）。
 
 ## 4. 下一步计划
 
-1. MVP 编辑器数据层：先做“动作列表编辑”与“节点基础属性编辑”。
-2. Jump/Branch 体验重做：jump 目标选择器（支持跨 flow）与 branch 条件节点模型落地。
-3. 流程可视化第一版：显示 jump 连线、目标高亮、缺失目标提示。
-4. 导入能力第一版：从 liteclicker 备份解析到 `LegacyIR`，再映射到新 `FlowGraph`。
-5. 版本升级链第一版：定义 `schemaVersion` 与迁移 step 骨架。
+1. 任务列表第二版：搜索、排序、批量操作、确认弹窗与空态优化。
+2. 浮窗交互优化：层级动效、关闭确认、节点编辑快捷操作。
+3. Branch 条件模型扩展（支持更多条件源配置）。
+4. 流程图交互增强：拖拽布局、连线点击跳转、缺失目标可修复提示。
+5. 导入/迁移链在任务体验稳定后接入（`LegacyIR -> migrateToLatest`）。
 
 ## 5. 风险与注意事项
 

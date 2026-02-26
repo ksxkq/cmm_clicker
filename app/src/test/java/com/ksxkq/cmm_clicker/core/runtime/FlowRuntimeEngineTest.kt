@@ -189,4 +189,57 @@ class FlowRuntimeEngineTest {
         assertTrue(startedNodes.contains("folder_flow/folderStart"))
         assertTrue(startedNodes.contains("main/afterFolder"))
     }
+
+    @Test
+    fun `should evaluate branch by eq operator`() {
+        val flow = TaskFlow(
+            flowId = "main",
+            name = "main",
+            entryNodeId = "start",
+            nodes = listOf(
+                FlowNode(nodeId = "start", kind = NodeKind.START),
+                FlowNode(
+                    nodeId = "branch",
+                    kind = NodeKind.BRANCH,
+                    params = mapOf(
+                        "variableKey" to "stage",
+                        "operator" to "eq",
+                        "expectedValue" to "vip",
+                    ),
+                ),
+                FlowNode(nodeId = "trueNode", kind = NodeKind.ACTION, actionType = ActionType.CLICK),
+                FlowNode(nodeId = "falseNode", kind = NodeKind.ACTION, actionType = ActionType.SWIPE),
+                FlowNode(nodeId = "end", kind = NodeKind.END),
+            ),
+            edges = listOf(
+                FlowEdge(edgeId = "e1", fromNodeId = "start", toNodeId = "branch"),
+                FlowEdge(edgeId = "e2", fromNodeId = "branch", toNodeId = "trueNode", conditionType = EdgeConditionType.TRUE),
+                FlowEdge(edgeId = "e3", fromNodeId = "branch", toNodeId = "falseNode", conditionType = EdgeConditionType.FALSE),
+                FlowEdge(edgeId = "e4", fromNodeId = "trueNode", toNodeId = "end"),
+                FlowEdge(edgeId = "e5", fromNodeId = "falseNode", toNodeId = "end"),
+            ),
+        )
+        val bundle = TaskBundle(
+            bundleId = "bundle_4",
+            name = "branch eq test",
+            schemaVersion = 1,
+            entryFlowId = "main",
+            flows = listOf(flow),
+        )
+
+        val result = runSuspend {
+            FlowRuntimeEngine(
+                options = RuntimeEngineOptions(dryRun = true),
+            ).execute(
+                bundle = bundle,
+                initialVariables = mapOf("stage" to "vip"),
+            )
+        }
+
+        val startedNodes = result.traceEvents
+            .filter { it.phase == RuntimeTracePhase.NODE_START }
+            .map { it.nodeId }
+        assertTrue(startedNodes.contains("trueNode"))
+        assertTrue(!startedNodes.contains("falseNode"))
+    }
 }

@@ -1,9 +1,13 @@
 package com.ksxkq.cmm_clicker.accessibility
 
 import android.accessibilityservice.GestureDescription
+import android.content.Context
+import android.graphics.Point
 import android.graphics.Path
 import android.graphics.PointF
+import android.os.Build
 import android.util.Log
+import android.view.WindowManager
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
@@ -20,8 +24,7 @@ object AccessibilityGestureExecutor {
         durationMs: Long = 60L,
     ): Boolean {
         val service = TaskAccessibilityService.instance ?: return false
-        val width = service.resources.displayMetrics.widthPixels
-        val height = service.resources.displayMetrics.heightPixels
+        val (width, height) = screenSizePx(service)
         val x = (xRatio.coerceIn(0.0, 1.0) * (width - 1)).toFloat()
         val y = (yRatio.coerceIn(0.0, 1.0) * (height - 1)).toFloat()
         service.showClickFeedback(x = x, y = y)
@@ -44,8 +47,7 @@ object AccessibilityGestureExecutor {
         durationMs: Long = 300L,
     ): Boolean {
         val service = TaskAccessibilityService.instance ?: return false
-        val width = service.resources.displayMetrics.widthPixels
-        val height = service.resources.displayMetrics.heightPixels
+        val (width, height) = screenSizePx(service)
         val startX = (startXRatio.coerceIn(0.0, 1.0) * (width - 1)).toFloat()
         val startY = (startYRatio.coerceIn(0.0, 1.0) * (height - 1)).toFloat()
         val endX = (endXRatio.coerceIn(0.0, 1.0) * (width - 1)).toFloat()
@@ -78,8 +80,7 @@ object AccessibilityGestureExecutor {
             return false
         }
         val service = TaskAccessibilityService.instance ?: return false
-        val width = service.resources.displayMetrics.widthPixels
-        val height = service.resources.displayMetrics.heightPixels
+        val (width, height) = screenSizePx(service)
         val path = Path()
         val pixelPoints = mutableListOf<PointF>()
         points.forEachIndexed { index, point ->
@@ -100,6 +101,21 @@ object AccessibilityGestureExecutor {
             durationMs = duration,
             gestureTag = "record",
         )
+    }
+
+    private fun screenSizePx(service: TaskAccessibilityService): Pair<Int, Int> {
+        val windowManager = service.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val bounds = windowManager.currentWindowMetrics.bounds
+            bounds.width() to bounds.height()
+        } else {
+            @Suppress("DEPRECATION")
+            val display = windowManager.defaultDisplay
+            val point = Point()
+            @Suppress("DEPRECATION")
+            display.getRealSize(point)
+            point.x to point.y
+        }
     }
 
     private suspend fun dispatchPath(

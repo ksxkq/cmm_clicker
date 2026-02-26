@@ -3,5 +3,11 @@
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="shapeAppearanceSmallComponent">@style/ShapeAppearance.CmmClicker.Component</item>
+        <item name="shapeAppearanceMediumComponent">@style/ShapeAppearance.CmmClicker.Component</item>
+        <item name="shapeAppearanceLargeComponent">@style/ShapeAppearance.CmmClicker.Component</item>
+        <item name="materialButtonStyle">@style/Widget.CmmClicker.Button</item>
+        <item name="materialButtonOutlinedStyle">@style/Widget.CmmClicker.Button.Outlined</item>
+        <item name="materialButtonTonalStyle">@style/Widget.CmmClicker.Button.Tonal</item>
     </style>
 </resources>

@@ -9,7 +9,10 @@
    - what is planned next
 3. Domain docs must be updated when relevant:
    - UI/Theme changes -> `docs/ui_theme_system.md`
+   - Editor capability changes -> `docs/editor_mvp_v1.md`
+   - Task list/repository changes -> `docs/task_list_mvp_v1.md`
    - Architecture/runtime/data model changes -> `docs/cmm_clicker_rebuild_blueprint_v1.md`
+   - Schema migration/import changes -> `docs/schema_migration_v1.md`
    - Legacy behavior analysis changes -> `docs/liteclicker_task_action_analysis.md`
 
 ## Update Timing

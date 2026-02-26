@@ -7,10 +7,12 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.PixelFormat
 import android.graphics.PointF
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
 import android.view.View
+import android.view.WindowInsets
 import android.view.WindowManager
 import kotlin.math.max
 import kotlin.math.min
@@ -73,10 +75,14 @@ class GestureFeedbackOverlay(
                 WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                     WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                 PixelFormat.TRANSLUCENT,
             ).apply {
                 gravity = Gravity.TOP or Gravity.START
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                }
             }
 
             try {
@@ -123,19 +129,20 @@ private class GestureFeedbackView(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+        val topInset = systemTopInset().toFloat()
         when (model.type) {
             FeedbackType.CLICK -> {
                 val x = model.clickX ?: return
                 val y = model.clickY ?: return
-                drawPoint(canvas, x, y)
+                drawPoint(canvas, x, y - topInset)
             }
 
             FeedbackType.SWIPE -> {
                 val start = model.start ?: return
                 val end = model.end ?: return
-                canvas.drawLine(start.x, start.y, end.x, end.y, linePaint)
-                drawPoint(canvas, start.x, start.y)
-                drawPoint(canvas, end.x, end.y)
+                canvas.drawLine(start.x, start.y - topInset, end.x, end.y - topInset, linePaint)
+                drawPoint(canvas, start.x, start.y - topInset)
+                drawPoint(canvas, end.x, end.y - topInset)
             }
 
             FeedbackType.PATH -> {
@@ -146,11 +153,21 @@ private class GestureFeedbackView(
                 for (i in 0 until points.size - 1) {
                     val p1 = points[i]
                     val p2 = points[i + 1]
-                    canvas.drawLine(p1.x, p1.y, p2.x, p2.y, linePaint)
+                    canvas.drawLine(p1.x, p1.y - topInset, p2.x, p2.y - topInset, linePaint)
                 }
-                drawPoint(canvas, points.first().x, points.first().y)
-                drawPoint(canvas, points.last().x, points.last().y)
+                drawPoint(canvas, points.first().x, points.first().y - topInset)
+                drawPoint(canvas, points.last().x, points.last().y - topInset)
             }
+        }
+    }
+
+    private fun systemTopInset(): Int {
+        val insets = rootWindowInsets ?: return 0
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            insets.getInsets(WindowInsets.Type.systemBars()).top
+        } else {
+            @Suppress("DEPRECATION")
+            insets.systemWindowInsetTop
         }
     }
 

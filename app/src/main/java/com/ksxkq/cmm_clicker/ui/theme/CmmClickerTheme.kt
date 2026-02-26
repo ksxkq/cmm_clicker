@@ -13,37 +13,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-private val MonoLightColorScheme = lightColorScheme(
-    primary = Color(0xFF111111),
-    onPrimary = Color(0xFFFFFFFF),
-    secondary = Color(0xFF333333),
-    onSecondary = Color(0xFFFFFFFF),
-    background = Color(0xFFFFFFFF),
-    onBackground = Color(0xFF111111),
-    surface = Color(0xFFFFFFFF),
-    onSurface = Color(0xFF111111),
-    surfaceVariant = Color(0xFFF6F6F6),
-    onSurfaceVariant = Color(0xFF4A4A4A),
-    outline = Color(0xFFE0E0E0),
-    error = Color(0xFF111111),
-    onError = Color(0xFFFFFFFF),
-)
+private fun monoLightColorScheme() = lightColorSchemeFrom(AppThemeTokens.palette(AppThemeMode.MONO_LIGHT))
 
-private val MonoDarkColorScheme = darkColorScheme(
-    primary = Color(0xFFF5F5F5),
-    onPrimary = Color(0xFF111111),
-    secondary = Color(0xFFE0E0E0),
-    onSecondary = Color(0xFF111111),
-    background = Color(0xFF101010),
-    onBackground = Color(0xFFF5F5F5),
-    surface = Color(0xFF101010),
-    onSurface = Color(0xFFF5F5F5),
-    surfaceVariant = Color(0xFF1E1E1E),
-    onSurfaceVariant = Color(0xFFD0D0D0),
-    outline = Color(0xFF2E2E2E),
-    error = Color(0xFFF5F5F5),
-    onError = Color(0xFF101010),
-)
+private fun monoDarkColorScheme() = darkColorSchemeFrom(AppThemeTokens.palette(AppThemeMode.MONO_DARK))
 
 private val AppShapes = Shapes(
     small = androidx.compose.foundation.shape.RoundedCornerShape(10.dp),
@@ -90,8 +62,8 @@ fun CmmClickerTheme(
     content: @Composable () -> Unit,
 ) {
     val colorScheme = when (themeMode) {
-        AppThemeMode.MONO_LIGHT -> MonoLightColorScheme
-        AppThemeMode.MONO_DARK -> MonoDarkColorScheme
+        AppThemeMode.MONO_LIGHT -> monoLightColorScheme()
+        AppThemeMode.MONO_DARK -> monoDarkColorScheme()
     }
 
     MaterialTheme(
@@ -101,3 +73,35 @@ fun CmmClickerTheme(
         content = content,
     )
 }
+
+private fun lightColorSchemeFrom(palette: AppThemePalette) = lightColorScheme(
+    primary = Color(palette.primary),
+    onPrimary = Color(palette.onPrimary),
+    secondary = Color(palette.secondary),
+    onSecondary = Color(palette.onSecondary),
+    background = Color(palette.background),
+    onBackground = Color(palette.onBackground),
+    surface = Color(palette.surface),
+    onSurface = Color(palette.onSurface),
+    surfaceVariant = Color(palette.surfaceVariant),
+    onSurfaceVariant = Color(palette.onSurfaceVariant),
+    outline = Color(palette.outline),
+    error = Color(palette.error),
+    onError = Color(palette.onError),
+)
+
+private fun darkColorSchemeFrom(palette: AppThemePalette) = darkColorScheme(
+    primary = Color(palette.primary),
+    onPrimary = Color(palette.onPrimary),
+    secondary = Color(palette.secondary),
+    onSecondary = Color(palette.onSecondary),
+    background = Color(palette.background),
+    onBackground = Color(palette.onBackground),
+    surface = Color(palette.surface),
+    onSurface = Color(palette.onSurface),
+    surfaceVariant = Color(palette.surfaceVariant),
+    onSurfaceVariant = Color(palette.onSurfaceVariant),
+    outline = Color(palette.outline),
+    error = Color(palette.error),
+    onError = Color(palette.onError),
+)

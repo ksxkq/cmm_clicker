@@ -1,5 +1,15 @@
 # cmm_clicker 重写蓝图 v1
 
+## 0. 当前实现进度（2026-02-26）
+
+1. 已完成 `FlowGraph + Runtime + 插件化动作` 骨架。
+2. 已完成辅助服务执行链路、可视化反馈、自动授权后自动启用。
+3. 已完成编辑器 MVP v1（动作列表编辑 + 节点基础属性编辑 + undo/redo + 校验面板）。
+4. 已交付 jump 目标选择器与 branch 目标编辑（列表点选）。
+5. 已交付流程图预览点击选中与边/jump 高亮，参数编辑已接入 schema 驱动。
+6. 已交付 schema 迁移骨架（`BundleMigrationEngine` + `v0->v1` step + 单测）。
+7. 已交付任务列表真实操作链路（新建/编辑/运行/重命名/复制/删除）与本地持久化。
+
 ## 1. 目标定义
 
 本次不是迁移，是“参考后重写”。
@@ -38,7 +48,7 @@
 5. `feature-import-export`：旧备份导入、新备份导出、导入报告。
 6. `feature-migration`：schema 升级链。
 7. `feature-ai-plan`：预留 Plan IR 与编译入口（先不做模型接入）。
-8. `infra-storage`：Room/SqlDelight 持久化（建议 Room 起步）。
+8. `infra-storage`：当前为文件 JSON 仓库（已落地），后续切换到 Room/SqlDelight。
 9. `infra-android`：Accessibility、截图、前台服务、权限。
 
 分层原则：
@@ -183,6 +193,11 @@ interface ActionPlugin {
 4. 分支/跳转目标可视化高亮。
 5. 静态校验面板（无目标、不可达、死循环风险、变量未定义）。
 
+当前进展：
+
+1. `undo/redo`、分支/跳转目标高亮、静态校验面板已落地（MVP 级）。
+2. 拖拽连线、自动对齐、面包屑导航尚未实现。
+
 ## 7.2 你关心的 jump 连线
 
 建议交互：
@@ -276,4 +291,3 @@ interface ActionPlugin {
 1. 先冻结 `MVP 动作和流程语义`（一个小文档即可）。
 2. 再落地 `FlowGraph + Runtime + 4 个基础插件(click/swipe/record/jump)`。
 3. 同步做最小编辑器（列表 + jump 目标选择 + 连线预览）。
-

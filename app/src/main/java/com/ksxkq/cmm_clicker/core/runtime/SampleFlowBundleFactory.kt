@@ -1,6 +1,7 @@
 package com.ksxkq.cmm_clicker.core.runtime
 
 import com.ksxkq.cmm_clicker.core.model.ActionType
+import com.ksxkq.cmm_clicker.core.model.BundleSchema
 import com.ksxkq.cmm_clicker.core.model.EdgeConditionType
 import com.ksxkq.cmm_clicker.core.model.FlowEdge
 import com.ksxkq.cmm_clicker.core.model.FlowNode
@@ -99,7 +100,7 @@ object SampleFlowBundleFactory {
         return TaskBundle(
             bundleId = "bundle_demo_001",
             name = "Demo Bundle",
-            schemaVersion = 1,
+            schemaVersion = BundleSchema.CURRENT_VERSION,
             entryFlowId = "main",
             flows = listOf(mainFlow, subFlow),
         )

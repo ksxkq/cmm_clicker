@@ -336,6 +336,35 @@ class FlowRuntimeEngine(
     private fun evalBranch(node: FlowNode, runtimeContext: RuntimeContext): Boolean {
         val key = node.params["variableKey"] as? String ?: return false
         val value = runtimeContext.variables[key]
+        val operator = node.params["operator"]?.toString()?.lowercase() ?: "truthy"
+        val expectedValue = node.params["expectedValue"]?.toString()
+
+        return when (operator) {
+            "eq" -> value?.toString() == (expectedValue ?: "")
+            "ne" -> value?.toString() != (expectedValue ?: "")
+            "gt" -> compareAsDouble(value, expectedValue) { left, right -> left > right }
+            "gte" -> compareAsDouble(value, expectedValue) { left, right -> left >= right }
+            "lt" -> compareAsDouble(value, expectedValue) { left, right -> left < right }
+            "lte" -> compareAsDouble(value, expectedValue) { left, right -> left <= right }
+            else -> asTruthy(value)
+        }
+    }
+
+    private fun compareAsDouble(
+        leftValue: Any?,
+        rightRaw: String?,
+        predicate: (Double, Double) -> Boolean,
+    ): Boolean {
+        val left = when (leftValue) {
+            is Number -> leftValue.toDouble()
+            is String -> leftValue.toDoubleOrNull()
+            else -> null
+        } ?: return false
+        val right = rightRaw?.toDoubleOrNull() ?: return false
+        return predicate(left, right)
+    }
+
+    private fun asTruthy(value: Any?): Boolean {
         return when (value) {
             is Boolean -> value
             is Number -> value.toInt() != 0

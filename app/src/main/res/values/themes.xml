@@ -3,5 +3,33 @@
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="shapeAppearanceSmallComponent">@style/ShapeAppearance.CmmClicker.Component</item>
+        <item name="shapeAppearanceMediumComponent">@style/ShapeAppearance.CmmClicker.Component</item>
+        <item name="shapeAppearanceLargeComponent">@style/ShapeAppearance.CmmClicker.Component</item>
+        <item name="materialButtonStyle">@style/Widget.CmmClicker.Button</item>
+        <item name="materialButtonOutlinedStyle">@style/Widget.CmmClicker.Button.Outlined</item>
+        <item name="materialButtonTonalStyle">@style/Widget.CmmClicker.Button.Tonal</item>
+    </style>
+
+    <style name="ShapeAppearance.CmmClicker.Component" parent="ShapeAppearance.Material3.SmallComponent">
+        <item name="cornerSize">12dp</item>
+    </style>
+
+    <style name="Widget.CmmClicker.Button" parent="Widget.Material3.Button">
+        <item name="android:minHeight">34dp</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:paddingHorizontal">14dp</item>
+    </style>
+
+    <style name="Widget.CmmClicker.Button.Outlined" parent="Widget.Material3.Button.OutlinedButton">
+        <item name="android:minHeight">34dp</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:paddingHorizontal">14dp</item>
+    </style>
+
+    <style name="Widget.CmmClicker.Button.Tonal" parent="Widget.Material3.Button.TonalButton">
+        <item name="android:minHeight">34dp</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:paddingHorizontal">14dp</item>
     </style>
 </resources>

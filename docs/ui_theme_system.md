@@ -11,9 +11,12 @@
 ## 2. 文件结构
 
 1. `app/src/main/java/com/ksxkq/cmm_clicker/ui/theme/AppThemeMode.kt`
-2. `app/src/main/java/com/ksxkq/cmm_clicker/ui/theme/CmmClickerTheme.kt`
-3. `app/src/main/java/com/ksxkq/cmm_clicker/ui/theme/ThemePreferenceStore.kt`
-4. `app/src/main/java/com/ksxkq/cmm_clicker/ui/MainActivity.kt`
+2. `app/src/main/java/com/ksxkq/cmm_clicker/ui/theme/AppThemeTokens.kt`
+3. `app/src/main/java/com/ksxkq/cmm_clicker/ui/theme/CmmClickerTheme.kt`
+4. `app/src/main/java/com/ksxkq/cmm_clicker/ui/theme/ThemePreferenceStore.kt`
+5. `app/src/main/java/com/ksxkq/cmm_clicker/ui/MainActivity.kt`
+6. `app/src/main/java/com/ksxkq/cmm_clicker/accessibility/TaskEditorGlobalOverlay.kt`
+7. `app/src/main/res/values/themes.xml`
 
 ## 3. 主题模式
 
@@ -24,13 +27,24 @@
 
 ## 4. 统一令牌
 
-在 `CmmClickerTheme` 中集中维护：
+在 `AppThemeTokens` 中集中维护：
 
 1. `ColorScheme`：背景、文本、边框、容器色。
-2. `Typography`：标题、正文、辅助文本。
-3. `Shapes`：统一圆角规范。
+2. `CmmClickerTheme` 将 `AppThemeTokens` 映射到 Compose `MaterialTheme`。
+3. 浮窗 `TaskEditorGlobalOverlay` 也走 Compose 渲染，并与首页复用同一 `CmmClickerTheme`。
+4. `Typography`：标题、正文、辅助文本。
+5. `Shapes`：统一圆角规范。
 
 页面组件只使用 `MaterialTheme.colorScheme / typography / shapes`，不直接引用固定色值。
+
+全局浮窗（Accessibility Overlay）主题策略：
+
+1. 从 `ThemePreferenceStore` 读取当前 `AppThemeMode`。
+2. 浮窗内部使用 `ComposeView + CmmClickerTheme(themeMode)` 直接渲染 Compose 组件。
+3. 首页与浮窗共享同一套 `AppThemeTokens`，按钮/文本/容器/连线视觉保持一致。
+4. 浮窗按钮风格收敛到黑白体系：主动作实心、普通动作描边，避免出现与主题不一致的彩色按钮。
+
+说明：WindowManager 负责把浮窗挂到系统窗口层，UI 层仍然可以全部使用 Compose；当前仅宿主是 View（`ComposeView`），视觉样式只维护一份 Compose 主题。
 
 ## 5. 页面约束
 
@@ -38,6 +52,10 @@
 2. 主要操作统一按钮样式（默认 `OutlinedButton`，主动作 `Button`）。
 3. 状态信息优先用文本语义表达（如 `[OK]` / `[OFF]`），不依赖彩色提示。
 4. `Switch` 显式配置 `checked/unchecked` 颜色，保证关闭状态在浅色和深色主题下都可见。
+5. `SwitchRow` 使用垂直居中布局，保证文字与开关对齐。
+6. 弹窗动效优先：浮窗默认使用背景渐暗 + 内容上滑的组合动效，后续交互沿用同一动画节奏。
+7. 浮窗遮罩保持半透明并覆盖状态栏区域，避免出现不透明灰底或顶部漏光。
+8. 弹窗支持点击遮罩关闭，并使用退出动效后再移除窗口，避免交互突兀。
 
 ## 6. 后续扩展建议
 

@@ -21,6 +21,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -63,6 +64,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.Alignment
@@ -502,6 +504,16 @@ class TaskEditorGlobalOverlay(
         }
     }
 
+    private fun repairSelectedJumpTarget(store: TaskGraphEditorStore) {
+        val current = store.state()
+        val fallbackFlowId = current.selectedFlowId
+        val fallbackNodeId = current.selectedFlow?.entryNodeId
+            ?: current.selectedNodeId
+            ?: "start"
+        store.updateSelectedNodeParam("targetFlowId", fallbackFlowId)
+        store.updateSelectedNodeParam("targetNodeId", fallbackNodeId)
+    }
+
     private fun mutateStore(
         message: String,
         mutation: (TaskGraphEditorStore) -> Unit,
@@ -673,6 +685,12 @@ class TaskEditorGlobalOverlay(
                             onEditNode = { nodeId ->
                                 store.selectNode(nodeId)
                                 pushRoute(OverlayRoute.NodeEditor(nodeId))
+                            },
+                            onRepairJumpTargetFromPreview = { nodeId ->
+                                mutateStore("已修复跳转目标") {
+                                    it.selectNode(nodeId)
+                                    repairSelectedJumpTarget(it)
+                                }
                             },
                             onOpenFlowManager = {
                                 pushRoute(OverlayRoute.FlowManager)
@@ -850,13 +868,7 @@ class TaskEditorGlobalOverlay(
                                         },
                                         onRepairJumpTarget = {
                                             mutateStore("已修复跳转目标") {
-                                                val current = it.state()
-                                                val fallbackFlowId = current.selectedFlowId
-                                                val fallbackNodeId = current.selectedFlow?.entryNodeId
-                                                    ?: current.selectedNodeId
-                                                    ?: "start"
-                                                it.updateSelectedNodeParam("targetFlowId", fallbackFlowId)
-                                                it.updateSelectedNodeParam("targetNodeId", fallbackNodeId)
+                                                repairSelectedJumpTarget(it)
                                             }
                                         },
                                         onFillDefaults = {
@@ -888,6 +900,7 @@ class TaskEditorGlobalOverlay(
         onTogglePreview: () -> Unit,
         onSave: () -> Unit,
         onEditNode: (String) -> Unit,
+        onRepairJumpTargetFromPreview: (String) -> Unit,
         onOpenFlowManager: () -> Unit,
         onNavigateByBreadcrumb: (Int) -> Unit,
         onClose: () -> Unit,
@@ -925,7 +938,12 @@ class TaskEditorGlobalOverlay(
             if (previewVisible && flow != null) {
                 Spacer(modifier = Modifier.height(8.dp))
                 SectionTitle("Flow Preview")
-                FlowPreviewGraph(flow = flow)
+                FlowPreviewGraph(
+                    flow = flow,
+                    selectedNodeId = state.selectedNodeId,
+                    onSelectNode = { onEditNode(it) },
+                    onOpenEdgeTarget = { onEditNode(it) },
+                )
                 val textPreview = buildString {
                     append("flow=${flow.flowId}\n")
                     flow.edges.forEach { edge ->
@@ -944,6 +962,43 @@ class TaskEditorGlobalOverlay(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                val invalidJumpNodes = flow.nodes
+                    .filter {
+                        it.kind == NodeKind.JUMP ||
+                            it.kind == NodeKind.FOLDER_REF ||
+                            it.kind == NodeKind.SUB_TASK_REF
+                    }
+                    .filter { node ->
+                        val targetFlowId = node.params["targetFlowId"]?.toString()?.trim().orEmpty()
+                        val targetNodeId = node.params["targetNodeId"]?.toString()?.trim().orEmpty()
+                        if (targetFlowId.isBlank() || targetNodeId.isBlank()) {
+                            true
+                        } else {
+                            val targetFlow = state.bundle.findFlow(targetFlowId)
+                            targetFlow?.findNode(targetNodeId) == null
+                        }
+                    }
+                if (invalidJumpNodes.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    SectionTitle("缺失目标修复")
+                    invalidJumpNodes.forEach { node ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text(
+                                text = nodeSummaryText(node),
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.weight(1f),
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                            OutlinedButton(onClick = { onRepairJumpTargetFromPreview(node.nodeId) }) {
+                                Text("修复")
+                            }
+                        }
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -1750,8 +1805,38 @@ class TaskEditorGlobalOverlay(
     }
 
     @Composable
-    private fun FlowPreviewGraph(flow: TaskFlow) {
-        val points = remember(flow) { calculateGraphPoints(flow) }
+    private fun FlowPreviewGraph(
+        flow: TaskFlow,
+        selectedNodeId: String?,
+        onSelectNode: (String) -> Unit,
+        onOpenEdgeTarget: (String) -> Unit,
+    ) {
+        val defaultPoints = remember(flow) { calculateGraphPoints(flow) }
+        val pointOverrides = remember(flow.flowId) { mutableStateMapOf<String, GraphPoint>() }
+        var draggingNodeId by remember(flow.flowId) { mutableStateOf<String?>(null) }
+        var didDragInCurrentGesture by remember(flow.flowId) { mutableStateOf(false) }
+        var suppressNextTap by remember(flow.flowId) { mutableStateOf(false) }
+        LaunchedEffect(flow.flowId, flow.nodes.map { it.nodeId }) {
+            val validNodeIds = flow.nodes.map { it.nodeId }.toSet()
+            pointOverrides.keys.toList().forEach { key ->
+                if (key !in validNodeIds) {
+                    pointOverrides.remove(key)
+                }
+            }
+            flow.nodes.forEach { node ->
+                if (!pointOverrides.containsKey(node.nodeId)) {
+                    defaultPoints[node.nodeId]?.let { pointOverrides[node.nodeId] = it }
+                }
+            }
+        }
+        val flowNodeIds = flow.nodes.map { it.nodeId }
+        val points = flow.nodes.associate { node ->
+            val point = pointOverrides[node.nodeId]
+                ?: defaultPoints[node.nodeId]
+                ?: GraphPoint(0.5f, 0.5f)
+            node.nodeId to point
+        }
+        val latestPoints = rememberUpdatedState(points)
         val edgeColor = MaterialTheme.colorScheme.onSurfaceVariant
         val jumpColor = MaterialTheme.colorScheme.primary
         val nodeFillColor = MaterialTheme.colorScheme.surface
@@ -1766,7 +1851,81 @@ class TaskEditorGlobalOverlay(
             Canvas(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(8.dp),
+                    .padding(8.dp)
+                    .pointerInput(flow.flowId, flowNodeIds) {
+                        detectTapGestures { tapOffset ->
+                            if (suppressNextTap) {
+                                suppressNextTap = false
+                                return@detectTapGestures
+                            }
+                            val pointsSnapshot = latestPoints.value
+                            val width = size.width.toFloat()
+                            val height = size.height.toFloat()
+                            val clickedNodeId = findClosestGraphNodeId(
+                                points = pointsSnapshot,
+                                tapOffset = tapOffset,
+                                width = width,
+                                height = height,
+                                thresholdPx = 22.dp.toPx(),
+                            )
+                            if (clickedNodeId != null) {
+                                onSelectNode(clickedNodeId)
+                                return@detectTapGestures
+                            }
+                            val targetNodeId = findClosestPreviewEdgeTarget(
+                                flow = flow,
+                                points = pointsSnapshot,
+                                tapOffset = tapOffset,
+                                width = width,
+                                height = height,
+                                thresholdPx = 16.dp.toPx(),
+                            )
+                            if (targetNodeId != null) {
+                                onOpenEdgeTarget(targetNodeId)
+                            }
+                        }
+                    }
+                    .pointerInput(flow.flowId, flowNodeIds) {
+                        detectDragGestures(
+                            onDragStart = { dragStart ->
+                                didDragInCurrentGesture = false
+                                val pointsSnapshot = latestPoints.value
+                                val width = size.width.toFloat()
+                                val height = size.height.toFloat()
+                                draggingNodeId = findClosestGraphNodeId(
+                                    points = pointsSnapshot,
+                                    tapOffset = dragStart,
+                                    width = width,
+                                    height = height,
+                                    thresholdPx = 26.dp.toPx(),
+                                )
+                            },
+                            onDragCancel = {
+                                draggingNodeId = null
+                                didDragInCurrentGesture = false
+                            },
+                            onDragEnd = {
+                                if (didDragInCurrentGesture) {
+                                    suppressNextTap = true
+                                }
+                                draggingNodeId = null
+                                didDragInCurrentGesture = false
+                            },
+                        ) { change, dragAmount ->
+                            val nodeId = draggingNodeId ?: return@detectDragGestures
+                            didDragInCurrentGesture = true
+                            val width = size.width.toFloat().takeIf { it > 0f } ?: return@detectDragGestures
+                            val height = size.height.toFloat().takeIf { it > 0f } ?: return@detectDragGestures
+                            val current = pointOverrides[nodeId]
+                                ?: defaultPoints[nodeId]
+                                ?: return@detectDragGestures
+                            pointOverrides[nodeId] = GraphPoint(
+                                xRatio = (current.xRatio + (dragAmount.x / width)).coerceIn(0.08f, 0.92f),
+                                yRatio = (current.yRatio + (dragAmount.y / height)).coerceIn(0.08f, 0.92f),
+                            )
+                            change.consume()
+                        }
+                    },
             ) {
                 val toOffset: (GraphPoint) -> Offset = { point ->
                     Offset(point.xRatio * size.width, point.yRatio * size.height)
@@ -1808,20 +1967,100 @@ class TaskEditorGlobalOverlay(
                 flow.nodes.forEach { node ->
                     val point = points[node.nodeId] ?: return@forEach
                     val center = toOffset(point)
+                    val isSelected = node.nodeId == selectedNodeId
                     drawCircle(
-                        color = nodeFillColor,
-                        radius = 7.dp.toPx(),
+                        color = if (isSelected) jumpColor else nodeFillColor,
+                        radius = if (isSelected) 8.dp.toPx() else 7.dp.toPx(),
                         center = center,
                     )
                     drawCircle(
-                        color = nodeStrokeColor,
-                        radius = 7.dp.toPx(),
+                        color = if (isSelected) jumpColor else nodeStrokeColor,
+                        radius = if (isSelected) 8.dp.toPx() else 7.dp.toPx(),
                         center = center,
-                        style = Stroke(width = 1.dp.toPx()),
+                        style = Stroke(width = if (isSelected) 2.dp.toPx() else 1.dp.toPx()),
                     )
                 }
             }
         }
+    }
+
+    private fun findClosestGraphNodeId(
+        points: Map<String, GraphPoint>,
+        tapOffset: Offset,
+        width: Float,
+        height: Float,
+        thresholdPx: Float,
+    ): String? {
+        if (points.isEmpty()) {
+            return null
+        }
+        var closestNodeId: String? = null
+        var closestDistSq = Float.MAX_VALUE
+        points.forEach { (nodeId, point) ->
+            val centerX = point.xRatio * width
+            val centerY = point.yRatio * height
+            val dx = tapOffset.x - centerX
+            val dy = tapOffset.y - centerY
+            val distSq = dx * dx + dy * dy
+            if (distSq < closestDistSq) {
+                closestDistSq = distSq
+                closestNodeId = nodeId
+            }
+        }
+        return if (closestDistSq <= thresholdPx * thresholdPx) closestNodeId else null
+    }
+
+    private fun findClosestPreviewEdgeTarget(
+        flow: TaskFlow,
+        points: Map<String, GraphPoint>,
+        tapOffset: Offset,
+        width: Float,
+        height: Float,
+        thresholdPx: Float,
+    ): String? {
+        var hitTarget: String? = null
+        var bestDistSq = thresholdPx * thresholdPx
+        val toOffset: (GraphPoint) -> Offset = { point ->
+            Offset(point.xRatio * width, point.yRatio * height)
+        }
+        flow.edges.forEach { edge ->
+            val from = points[edge.fromNodeId] ?: return@forEach
+            val to = points[edge.toNodeId] ?: return@forEach
+            val distSq = distanceSquaredToSegment(
+                point = tapOffset,
+                a = toOffset(from),
+                b = toOffset(to),
+            )
+            if (distSq < bestDistSq) {
+                bestDistSq = distSq
+                hitTarget = edge.toNodeId
+            }
+        }
+        flow.nodes
+            .filter {
+                it.kind == NodeKind.JUMP ||
+                    it.kind == NodeKind.FOLDER_REF ||
+                    it.kind == NodeKind.SUB_TASK_REF
+            }
+            .forEach { node ->
+                val targetFlowId = node.params["targetFlowId"]?.toString()?.takeIf { it.isNotBlank() } ?: flow.flowId
+                val targetNodeId = node.params["targetNodeId"]?.toString()?.takeIf { it.isNotBlank() } ?: return@forEach
+                if (targetFlowId != flow.flowId) {
+                    return@forEach
+                }
+                val from = points[node.nodeId] ?: return@forEach
+                val to = points[targetNodeId] ?: return@forEach
+                val distSq = distanceSquaredToSegment(
+                    point = tapOffset,
+                    a = toOffset(from),
+                    b = toOffset(to),
+                )
+                if (distSq < bestDistSq) {
+                    bestDistSq = distSq
+                    hitTarget = targetNodeId
+                }
+            }
+        return hitTarget
     }
 
     private fun buildJumpConnections(

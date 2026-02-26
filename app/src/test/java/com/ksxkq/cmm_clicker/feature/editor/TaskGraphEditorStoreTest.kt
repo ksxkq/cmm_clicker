@@ -94,4 +94,29 @@ class TaskGraphEditorStoreTest {
         assertEquals("click", trueEdge?.toNodeId)
         assertEquals("swipe", falseEdge?.toNodeId)
     }
+
+    @Test
+    fun actionTypeSwitch_shouldPruneStaleParamsAndKeepCommonDefaults() {
+        val store = TaskGraphEditorStore(
+            initialBundle = SampleFlowBundleFactory.createSimpleDemoBundle(),
+        )
+        store.selectFlow("main")
+        store.selectNode("click")
+
+        store.updateSelectedNodeActionType(ActionType.SWIPE)
+        val swipeNode = store.state().selectedNode!!
+        assertEquals(ActionType.SWIPE, swipeNode.actionType)
+        assertTrue(swipeNode.params["x"] == null)
+        assertTrue(swipeNode.params["y"] == null)
+        assertEquals("0.5", swipeNode.params["startX"])
+        assertEquals("60", swipeNode.params["durationMs"])
+
+        store.updateSelectedNodeActionType(ActionType.CLICK)
+        val clickNode = store.state().selectedNode!!
+        assertEquals(ActionType.CLICK, clickNode.actionType)
+        assertTrue(clickNode.params["startX"] == null)
+        assertTrue(clickNode.params["startY"] == null)
+        assertEquals("0.5", clickNode.params["x"])
+        assertEquals("60", clickNode.params["durationMs"])
+    }
 }

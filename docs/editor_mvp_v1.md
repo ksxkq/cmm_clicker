@@ -54,12 +54,17 @@
 19. 动作列表支持同 flow 的 jump 连线，可在列表态直接观察跳转关系。
 20. 浮窗编辑器交互动画升级：背景渐暗 + 底部上滑进场，作为后续编辑/弹窗交互的统一动画基线。
 21. 浮窗支持点击遮罩关闭，并带退出动画（背景淡出 + 面板下滑），统一弹窗开合体验。
+22. 参数 schema 升级到 v1.1：字段支持 `required/default/min/max/helperText`，主页面与浮窗编辑器统一展示校验错误提示、辅助文案、数值键盘，并提供“填充默认值”快捷操作。
+23. 动作类型切换会清理旧类型遗留参数并补齐新类型默认参数，避免 `click` 参数残留到 `swipe` 等类型。
+24. 全局浮窗中“动作列表 -> 编辑详情”改为同窗口页面级转场（滑动 + 淡入淡出），避免硬切换生硬感。
+25. 全局浮窗参数输入接入键盘避让：容器 `imePadding` + 输入框聚焦自动 `bringIntoView`，降低键盘覆盖输入项概率。
 
 ## 2.3 测试
 
 文件：
 
 1. `app/src/test/java/com/ksxkq/cmm_clicker/feature/editor/TaskGraphEditorStoreTest.kt`
+2. `app/src/test/java/com/ksxkq/cmm_clicker/feature/editor/EditorParamSchemaTest.kt`
 
 覆盖：
 
@@ -67,11 +72,13 @@
 2. 入口节点删除保护。
 3. kind/actionType/params 编辑链路。
 4. branch `variableKey` 与 TRUE/FALSE 目标边编辑。
+5. 参数 schema 默认值合并与字段校验（必填/数值/枚举）。
+6. 动作类型切换时参数清理（去除旧类型字段，保留公共字段）。
 
 ## 3. 已知限制
 
 1. 流程图预览仅支持查看和选中，尚未支持拖拽布局与连线编辑。
-2. 参数 schema 目前是 UI 约束，尚未接入插件级强校验和默认值自动补齐。
+2. 参数 schema 已接入默认值补齐与 UI 级校验，但运行时尚未做“插件声明级强校验失败即拒绝执行”。
 3. 节点 ID 暂未开放编辑，避免牵扯边和引用联动迁移。
 4. Flow 的新增/删除/重命名暂未开放。
 

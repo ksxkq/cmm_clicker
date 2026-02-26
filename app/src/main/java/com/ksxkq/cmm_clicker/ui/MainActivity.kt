@@ -65,6 +65,7 @@ import com.ksxkq.cmm_clicker.core.runtime.RuntimeEngineOptions
 import com.ksxkq.cmm_clicker.core.runtime.SampleFlowBundleFactory
 import com.ksxkq.cmm_clicker.feature.editor.EditorParamSchemaRegistry
 import com.ksxkq.cmm_clicker.feature.editor.EditorActionTypeCatalog
+import com.ksxkq.cmm_clicker.feature.editor.EditorParamValidator
 import com.ksxkq.cmm_clicker.feature.editor.ParamFieldDefinition
 import com.ksxkq.cmm_clicker.feature.editor.ParamFieldInputType
 import com.ksxkq.cmm_clicker.feature.editor.TaskGraphEditorState
@@ -229,6 +230,10 @@ class MainActivity : ComponentActivity() {
                         },
                         onEditorUpdateParam = { key, value ->
                             editorStore.updateSelectedNodeParam(key, value)
+                            touchEditor(modified = true)
+                        },
+                        onEditorFillDefaults = {
+                            editorStore.fillDefaultsForSelectedNode()
                             touchEditor(modified = true)
                         },
                         onEditorUpdateBranchTarget = { condition, targetNodeId ->
@@ -582,6 +587,7 @@ private fun HomeScreen(
     onEditorUpdateEnabled: (Boolean) -> Unit,
     onEditorUpdateActive: (Boolean) -> Unit,
     onEditorUpdateParam: (String, String) -> Unit,
+    onEditorFillDefaults: () -> Unit,
     onEditorUpdateBranchTarget: (EdgeConditionType, String) -> Unit,
     onEditorReset: () -> Unit,
     onEditorSave: () -> Unit,
@@ -687,6 +693,7 @@ private fun HomeScreen(
                 onUpdateEnabled = onEditorUpdateEnabled,
                 onUpdateActive = onEditorUpdateActive,
                 onUpdateParam = onEditorUpdateParam,
+                onFillDefaults = onEditorFillDefaults,
                 onUpdateBranchTarget = onEditorUpdateBranchTarget,
                 onReset = onEditorReset,
                 onSave = onEditorSave,
@@ -854,6 +861,7 @@ private fun TaskActionOverlayDialog(
     onUpdateEnabled: (Boolean) -> Unit,
     onUpdateActive: (Boolean) -> Unit,
     onUpdateParam: (String, String) -> Unit,
+    onFillDefaults: () -> Unit,
     onUpdateBranchTarget: (EdgeConditionType, String) -> Unit,
     onSave: () -> Unit,
 ) {
@@ -981,6 +989,7 @@ private fun TaskActionOverlayDialog(
             onUpdateEnabled = onUpdateEnabled,
             onUpdateActive = onUpdateActive,
             onUpdateParam = onUpdateParam,
+            onFillDefaults = onFillDefaults,
             onUpdateBranchTarget = onUpdateBranchTarget,
             onSave = onSave,
         )
@@ -998,6 +1007,7 @@ private fun NodeEditDialog(
     onUpdateEnabled: (Boolean) -> Unit,
     onUpdateActive: (Boolean) -> Unit,
     onUpdateParam: (String, String) -> Unit,
+    onFillDefaults: () -> Unit,
     onUpdateBranchTarget: (EdgeConditionType, String) -> Unit,
     onSave: () -> Unit,
 ) {
@@ -1229,11 +1239,20 @@ private fun NodeEditDialog(
                     }
                 }
 
-                Text(
-                    text = "Params",
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.Medium,
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "Params",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    OutlinedButton(onClick = onFillDefaults) {
+                        Text("填充默认值")
+                    }
+                }
                 if (paramKeys.isEmpty()) {
                     Text(
                         text = "当前节点没有可编辑参数",
@@ -1402,6 +1421,7 @@ private fun EditorPanel(
     onUpdateEnabled: (Boolean) -> Unit,
     onUpdateActive: (Boolean) -> Unit,
     onUpdateParam: (String, String) -> Unit,
+    onFillDefaults: () -> Unit,
     onUpdateBranchTarget: (EdgeConditionType, String) -> Unit,
     onReset: () -> Unit,
     onSave: () -> Unit,
@@ -1795,11 +1815,20 @@ private fun EditorPanel(
                 }
             }
 
-            Text(
-                text = "Params",
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.Medium,
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Params",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.Medium,
+                )
+                OutlinedButton(onClick = onFillDefaults) {
+                    Text("填充默认值")
+                }
+            }
             if (paramKeys.isEmpty()) {
                 Text(
                     text = "当前节点没有默认参数，可以通过切换 kind/actionType 自动出现参数。",
@@ -2053,6 +2082,8 @@ private fun ParamFieldEditor(
 ) {
     val label = definition?.label ?: key
     val options = definition?.options.orEmpty()
+    val helperText = definition?.helperText
+    val errorText = EditorParamValidator.validate(definition, value)
     if (options.isNotEmpty()) {
         Text(
             text = label,
@@ -2077,6 +2108,19 @@ private fun ParamFieldEditor(
                 }
             }
         }
+        if (!errorText.isNullOrBlank()) {
+            Text(
+                text = errorText,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+            )
+        } else if (!helperText.isNullOrBlank()) {
+            Text(
+                text = helperText,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         return
     }
 
@@ -2090,7 +2134,19 @@ private fun ParamFieldEditor(
         onValueChange = onValueChange,
         modifier = Modifier.fillMaxWidth(),
         label = { Text(label) },
+        placeholder = {
+            definition?.defaultValue?.let { default ->
+                Text("默认: $default")
+            }
+        },
         keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
+        isError = !errorText.isNullOrBlank(),
+        supportingText = {
+            when {
+                !errorText.isNullOrBlank() -> Text(errorText)
+                !helperText.isNullOrBlank() -> Text(helperText)
+            }
+        },
         singleLine = true,
     )
 }

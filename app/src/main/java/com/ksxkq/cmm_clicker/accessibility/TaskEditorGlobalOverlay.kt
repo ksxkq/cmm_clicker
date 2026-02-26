@@ -6,15 +6,20 @@ import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -30,11 +35,15 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -55,6 +64,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.Alignment
@@ -64,6 +74,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
@@ -71,6 +82,7 @@ import androidx.compose.ui.platform.AndroidUiDispatcher
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.core.view.ViewCompat
 import androidx.lifecycle.Lifecycle
@@ -91,6 +103,9 @@ import com.ksxkq.cmm_clicker.core.model.NodeKind
 import com.ksxkq.cmm_clicker.core.model.TaskFlow
 import com.ksxkq.cmm_clicker.feature.editor.EditorActionTypeCatalog
 import com.ksxkq.cmm_clicker.feature.editor.EditorParamSchemaRegistry
+import com.ksxkq.cmm_clicker.feature.editor.EditorParamValidator
+import com.ksxkq.cmm_clicker.feature.editor.ParamFieldDefinition
+import com.ksxkq.cmm_clicker.feature.editor.ParamFieldInputType
 import com.ksxkq.cmm_clicker.feature.editor.TaskGraphEditorState
 import com.ksxkq.cmm_clicker.feature.editor.TaskGraphEditorStore
 import com.ksxkq.cmm_clicker.feature.task.LocalFileTaskRepository
@@ -466,6 +481,7 @@ class TaskEditorGlobalOverlay(
                         },
                     )
                 }
+                .imePadding()
                 .padding(horizontal = 14.dp, vertical = 18.dp),
             contentAlignment = Alignment.BottomCenter,
         ) {
@@ -509,84 +525,121 @@ class TaskEditorGlobalOverlay(
                             onClick = {},
                         ),
                 ) {
-                    if (editingNodeId == null) {
-                        ActionListScreen(
-                            taskName = task.name,
-                            state = state,
-                            onAddAction = {
-                                mutateStore("已添加动作") { it.addActionNode() }
-                            },
-                            onTogglePreview = {
-                                previewVisible = !previewVisible
-                                touchEditor()
-                            },
-                            onSave = {
-                                persistCurrentTask("已保存")
-                            },
-                            onEditNode = { nodeId ->
-                                store.selectNode(nodeId)
-                                editingNodeId = nodeId
-                                touchEditor()
-                            },
-                            onClose = { hide() },
-                        )
-                    } else {
-                        NodeEditScreen(
-                            state = state,
-                            onBack = {
-                                editingNodeId = null
-                                touchEditor()
-                            },
-                            onClose = { hide() },
-                            onDelete = {
-                                mutateStore("已删除动作") {
-                                    it.removeSelectedNode()
-                                }
-                                editingNodeId = null
-                                touchEditor()
-                            },
-                            onSave = {
-                                persistCurrentTask("已保存")
-                            },
-                            onDone = {
-                                editingNodeId = null
-                                touchEditor()
-                            },
-                            onUpdateNodeKind = { kind ->
-                                val editingId = editingNodeId
-                                mutateStore("已切换 kind=$kind") {
-                                    it.updateSelectedNodeKind(kind)
-                                    if (kind != NodeKind.ACTION && editingId != null) {
-                                        it.selectNode(editingId)
+                    AnimatedContent(
+                        targetState = editingNodeId,
+                        transitionSpec = {
+                            if (targetState != null && initialState == null) {
+                                (
+                                    slideInHorizontally(
+                                        animationSpec = tween(260, easing = FastOutSlowInEasing),
+                                        initialOffsetX = { fullWidth -> fullWidth / 3 },
+                                    ) + fadeIn(animationSpec = tween(220))
+                                    ) togetherWith (
+                                    slideOutHorizontally(
+                                        animationSpec = tween(220, easing = FastOutSlowInEasing),
+                                        targetOffsetX = { fullWidth -> -fullWidth / 5 },
+                                    ) + fadeOut(animationSpec = tween(180))
+                                    )
+                            } else {
+                                (
+                                    slideInHorizontally(
+                                        animationSpec = tween(240, easing = FastOutSlowInEasing),
+                                        initialOffsetX = { fullWidth -> -fullWidth / 4 },
+                                    ) + fadeIn(animationSpec = tween(200))
+                                    ) togetherWith (
+                                    slideOutHorizontally(
+                                        animationSpec = tween(200, easing = FastOutSlowInEasing),
+                                        targetOffsetX = { fullWidth -> fullWidth / 4 },
+                                    ) + fadeOut(animationSpec = tween(160))
+                                    )
+                            }
+                        },
+                        label = "overlay_page_switch",
+                    ) { targetNodeId ->
+                        if (targetNodeId == null) {
+                            ActionListScreen(
+                                taskName = task.name,
+                                state = state,
+                                onAddAction = {
+                                    mutateStore("已添加动作") { it.addActionNode() }
+                                },
+                                onTogglePreview = {
+                                    previewVisible = !previewVisible
+                                    touchEditor()
+                                },
+                                onSave = {
+                                    persistCurrentTask("已保存")
+                                },
+                                onEditNode = { nodeId ->
+                                    store.selectNode(nodeId)
+                                    editingNodeId = nodeId
+                                    touchEditor()
+                                },
+                                onClose = { hide() },
+                            )
+                        } else {
+                            NodeEditScreen(
+                                state = state,
+                                onBack = {
+                                    editingNodeId = null
+                                    touchEditor()
+                                },
+                                onClose = { hide() },
+                                onDelete = {
+                                    mutateStore("已删除动作") {
+                                        it.removeSelectedNode()
                                     }
-                                }
-                            },
-                            onUpdateActionType = { actionType ->
-                                mutateStore("已切换 actionType=${actionType.raw}") {
-                                    it.updateSelectedNodeActionType(actionType)
-                                }
-                            },
-                            onUpdateEnabled = { enabled ->
-                                mutateStore("已更新 enabled=$enabled") {
-                                    it.updateSelectedNodeEnabled(enabled)
-                                }
-                            },
-                            onUpdateActive = { active ->
-                                mutateStore("已更新 active=$active") {
-                                    it.updateSelectedNodeActive(active)
-                                }
-                            },
-                            onUpdateParam = { key, value ->
-                                mutateStore("已设置 $key=$value") {
-                                    it.updateSelectedNodeParam(key, value)
-                                }
-                            },
-                            onUpdateBranchTarget = { condition, targetNodeId ->
-                                mutateStore("已设置 ${condition.name}=$targetNodeId") {
-                                    it.updateSelectedBranchTarget(condition, targetNodeId)
-                                }
-                            },
-                        )
+                                    editingNodeId = null
+                                    touchEditor()
+                                },
+                                onSave = {
+                                    persistCurrentTask("已保存")
+                                },
+                                onDone = {
+                                    editingNodeId = null
+                                    touchEditor()
+                                },
+                                onUpdateNodeKind = { kind ->
+                                    val editingId = editingNodeId
+                                    mutateStore("已切换 kind=$kind") {
+                                        it.updateSelectedNodeKind(kind)
+                                        if (kind != NodeKind.ACTION && editingId != null) {
+                                            it.selectNode(editingId)
+                                        }
+                                    }
+                                },
+                                onUpdateActionType = { actionType ->
+                                    mutateStore("已切换 actionType=${actionType.raw}") {
+                                        it.updateSelectedNodeActionType(actionType)
+                                    }
+                                },
+                                onUpdateEnabled = { enabled ->
+                                    mutateStore("已更新 enabled=$enabled") {
+                                        it.updateSelectedNodeEnabled(enabled)
+                                    }
+                                },
+                                onUpdateActive = { active ->
+                                    mutateStore("已更新 active=$active") {
+                                        it.updateSelectedNodeActive(active)
+                                    }
+                                },
+                                onUpdateParam = { key, value ->
+                                    mutateStore("已设置 $key=$value") {
+                                        it.updateSelectedNodeParam(key, value)
+                                    }
+                                },
+                                onFillDefaults = {
+                                    mutateStore("已填充默认参数") {
+                                        it.fillDefaultsForSelectedNode()
+                                    }
+                                },
+                                onUpdateBranchTarget = { condition, selectedTargetNodeId ->
+                                    mutateStore("已设置 ${condition.name}=$selectedTargetNodeId") {
+                                        it.updateSelectedBranchTarget(condition, selectedTargetNodeId)
+                                    }
+                                },
+                            )
+                        }
                     }
                 }
             }
@@ -689,6 +742,7 @@ class TaskEditorGlobalOverlay(
         onUpdateEnabled: (Boolean) -> Unit,
         onUpdateActive: (Boolean) -> Unit,
         onUpdateParam: (String, String) -> Unit,
+        onFillDefaults: () -> Unit,
         onUpdateBranchTarget: (EdgeConditionType, String) -> Unit,
     ) {
         val node = state.selectedNode
@@ -713,6 +767,9 @@ class TaskEditorGlobalOverlay(
         OverlayDialogScaffold(
             title = "编辑动作: ${node.nodeId}",
             showBack = true,
+            headerActions = listOf(
+                OverlayAction("填充默认值", style = OverlayButtonStyle.TONAL, onClick = onFillDefaults),
+            ),
             footerActions = listOf(
                 OverlayAction("删除动作", style = OverlayButtonStyle.TONAL, onClick = onDelete),
                 OverlayAction("保存", style = OverlayButtonStyle.OUTLINE, onClick = onSave),
@@ -813,6 +870,9 @@ class TaskEditorGlobalOverlay(
                 paramKeys.forEach { key ->
                     val definition = schemaByKey[key]
                     val options = definition?.options.orEmpty()
+                    val value = node.params[key]?.toString().orEmpty()
+                    val helperText = definition?.helperText
+                    val errorText = EditorParamValidator.validate(definition, value)
                     if (options.isNotEmpty()) {
                         Text(
                             text = key,
@@ -821,13 +881,27 @@ class TaskEditorGlobalOverlay(
                         )
                         OptionButtons(
                             options = options,
-                            selected = node.params[key]?.toString(),
+                            selected = value,
                             onSelect = { onUpdateParam(key, it) },
                         )
+                        if (!errorText.isNullOrBlank()) {
+                            Text(
+                                text = errorText,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        } else if (!helperText.isNullOrBlank()) {
+                            Text(
+                                text = helperText,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     } else {
                         ParamTextFieldRow(
                             keyLabel = key,
-                            value = node.params[key]?.toString().orEmpty(),
+                            value = value,
+                            definition = definition,
                             onApply = { onUpdateParam(key, it) },
                         )
                     }
@@ -989,13 +1063,24 @@ class TaskEditorGlobalOverlay(
         }
     }
 
+    @OptIn(ExperimentalFoundationApi::class)
     @Composable
     private fun ParamTextFieldRow(
         keyLabel: String,
         value: String,
+        definition: ParamFieldDefinition?,
         onApply: (String) -> Unit,
     ) {
         var draft by remember(keyLabel, value) { mutableStateOf(value) }
+        val helperText = definition?.helperText
+        val validationError = EditorParamValidator.validate(definition, draft)
+        val bringIntoViewRequester = remember { BringIntoViewRequester() }
+        val coroutineScope = rememberCoroutineScope()
+        val keyboardType = if (definition?.inputType == ParamFieldInputType.NUMBER) {
+            KeyboardType.Number
+        } else {
+            KeyboardType.Text
+        }
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -1004,11 +1089,37 @@ class TaskEditorGlobalOverlay(
             OutlinedTextField(
                 value = draft,
                 onValueChange = { draft = it },
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .bringIntoViewRequester(bringIntoViewRequester)
+                    .onFocusChanged { focusState ->
+                        if (focusState.isFocused) {
+                            coroutineScope.launch {
+                                delay(120)
+                                runCatching { bringIntoViewRequester.bringIntoView() }
+                            }
+                        }
+                    },
                 label = { Text(keyLabel) },
+                placeholder = {
+                    definition?.defaultValue?.let { default ->
+                        Text("默认: $default")
+                    }
+                },
+                keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
+                isError = !validationError.isNullOrBlank(),
+                supportingText = {
+                    when {
+                        !validationError.isNullOrBlank() -> Text(validationError)
+                        !helperText.isNullOrBlank() -> Text(helperText)
+                    }
+                },
                 singleLine = true,
             )
-            OutlinedButton(onClick = { onApply(draft) }) {
+            OutlinedButton(
+                enabled = validationError == null,
+                onClick = { onApply(draft) },
+            ) {
                 Text("设定")
             }
         }

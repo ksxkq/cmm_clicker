@@ -171,9 +171,17 @@ class TaskGraphEditorStore(
                 NodeKind.ACTION -> {
                     val targetActionType = node.actionType ?: ActionType.CLICK
                     val nextParams = if (node.kind == NodeKind.ACTION) {
-                        node.params
+                        EditorParamSchemaRegistry.mergedParamsWithDefaults(
+                            node.copy(actionType = targetActionType),
+                        )
                     } else {
-                        defaultParamsForAction(targetActionType)
+                        EditorParamSchemaRegistry.mergedParamsWithDefaults(
+                            node.copy(
+                                kind = NodeKind.ACTION,
+                                actionType = targetActionType,
+                                params = emptyMap(),
+                            ),
+                        )
                     }
                     node.copy(
                         kind = kind,
@@ -262,7 +270,21 @@ class TaskGraphEditorStore(
             if (node.kind != NodeKind.ACTION) {
                 node
             } else {
-                node.copy(actionType = actionType)
+                val updated = node.copy(actionType = actionType)
+                val previousFieldKeys = EditorParamSchemaRegistry.fieldsFor(node)
+                    .map { it.key }
+                    .toSet()
+                val targetFieldKeys = EditorParamSchemaRegistry.fieldsFor(updated)
+                    .map { it.key }
+                    .toSet()
+                val staleFieldKeys = previousFieldKeys - targetFieldKeys
+                val mergedParams = EditorParamSchemaRegistry.mergedParamsWithDefaults(updated).toMutableMap()
+                staleFieldKeys.forEach { staleKey ->
+                    mergedParams.remove(staleKey)
+                }
+                updated.copy(
+                    params = mergedParams,
+                )
             }
         }
     }
@@ -298,6 +320,12 @@ class TaskGraphEditorStore(
                 node.params + (key to trimmed)
             }
             node.copy(params = nextParams)
+        }
+    }
+
+    fun fillDefaultsForSelectedNode() {
+        updateSelectedNode { node ->
+            node.copy(params = EditorParamSchemaRegistry.mergedParamsWithDefaults(node))
         }
     }
 
@@ -481,35 +509,4 @@ class TaskGraphEditorStore(
         }
     }
 
-    private fun defaultParamsForAction(actionType: ActionType): Map<String, Any?> {
-        return when (actionType) {
-            ActionType.CLICK -> mapOf(
-                "x" to "0.5",
-                "y" to "0.5",
-                "durationMs" to "60",
-            )
-
-            ActionType.DUP_CLICK -> mapOf(
-                "x" to "0.5",
-                "y" to "0.5",
-                "durationMs" to "50",
-                "count" to "2",
-                "intervalMs" to "80",
-            )
-
-            ActionType.SWIPE -> mapOf(
-                "startX" to "0.5",
-                "startY" to "0.8",
-                "endX" to "0.5",
-                "endY" to "0.2",
-                "durationMs" to "300",
-            )
-
-            ActionType.RECORD -> mapOf(
-                "durationMs" to "400",
-            )
-
-            else -> emptyMap()
-        }
-    }
 }

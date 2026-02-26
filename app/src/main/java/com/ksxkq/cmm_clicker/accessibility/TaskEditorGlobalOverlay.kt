@@ -6,18 +6,14 @@ import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
-import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -74,6 +70,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -143,6 +140,14 @@ class TaskEditorGlobalOverlay(
         val onClick: () -> Unit,
     )
 
+    private sealed interface OverlayRoute {
+        data object ActionList : OverlayRoute
+
+        data class NodeEditor(
+            val nodeId: String,
+        ) : OverlayRoute
+    }
+
     private enum class OverlayButtonStyle {
         SOLID,
         OUTLINE,
@@ -164,7 +169,7 @@ class TaskEditorGlobalOverlay(
     private var editorStore by mutableStateOf<TaskGraphEditorStore?>(null)
     private var themeMode by mutableStateOf(AppThemeMode.MONO_LIGHT)
     private var overlayVisible by mutableStateOf(false)
-    private var editingNodeId by mutableStateOf<String?>(null)
+    private var routeStack by mutableStateOf(listOf<OverlayRoute>(OverlayRoute.ActionList))
     private var previewVisible by mutableStateOf(false)
     private var statusText by mutableStateOf("")
     private var editorRevision by mutableIntStateOf(0)
@@ -185,7 +190,7 @@ class TaskEditorGlobalOverlay(
             themeMode = currentThemeMode
             currentTask = task
             editorStore = TaskGraphEditorStore(initialBundle = task.bundle)
-            editingNodeId = null
+            routeStack = listOf(OverlayRoute.ActionList)
             previewVisible = false
             statusText = "全局浮窗已打开"
             overlayDismissJob?.cancel()
@@ -386,11 +391,78 @@ class TaskEditorGlobalOverlay(
         composeOwner?.destroy()
         composeOwner = null
         overlayVisible = false
-        editingNodeId = null
+        routeStack = listOf(OverlayRoute.ActionList)
     }
 
     private fun touchEditor() {
         editorRevision++
+    }
+
+    private fun pushRoute(route: OverlayRoute) {
+        routeStack = routeStack + route
+        touchEditor()
+    }
+
+    private fun popRoute() {
+        if (routeStack.size <= 1) {
+            return
+        }
+        routeStack = routeStack.dropLast(1)
+        touchEditor()
+    }
+
+    private fun popToRouteDepth(targetDepth: Int) {
+        val maxDepth = routeStack.lastIndex
+        if (maxDepth <= 0) {
+            return
+        }
+        val depth = targetDepth.coerceIn(0, maxDepth)
+        if (depth == maxDepth) {
+            return
+        }
+        routeStack = routeStack.take(depth + 1)
+        touchEditor()
+    }
+
+    private data class BreadcrumbItem(
+        val label: String,
+        val routeDepth: Int,
+    )
+
+    private fun buildBreadcrumbs(
+        taskName: String,
+        state: TaskGraphEditorState,
+    ): List<BreadcrumbItem> {
+        val breadcrumbs = mutableListOf(
+            BreadcrumbItem(
+                label = taskName.ifBlank { "任务" },
+                routeDepth = 0,
+            ),
+        )
+        routeStack.forEachIndexed { index, route ->
+            when (route) {
+                OverlayRoute.ActionList -> breadcrumbs += BreadcrumbItem(
+                    label = "动作列表",
+                    routeDepth = index,
+                )
+
+                is OverlayRoute.NodeEditor -> {
+                    val node = state.selectedFlow?.findNode(route.nodeId)
+                        ?: state.bundle.flows.asSequence()
+                            .mapNotNull { it.findNode(route.nodeId) }
+                            .firstOrNull()
+                    breadcrumbs += BreadcrumbItem(
+                        label = if (node != null) {
+                            "编辑 ${nodeSummaryText(node)}"
+                        } else {
+                            "编辑 ${route.nodeId}"
+                        },
+                        routeDepth = index,
+                    )
+                }
+            }
+        }
+        return breadcrumbs
     }
 
     private fun persistCurrentTask(message: String) {
@@ -438,6 +510,9 @@ class TaskEditorGlobalOverlay(
             return
         }
         val state = store.state()
+        val currentRoute = routeStack.lastOrNull() ?: OverlayRoute.ActionList
+        val editingNodeId = (currentRoute as? OverlayRoute.NodeEditor)?.nodeId
+        val breadcrumbs = buildBreadcrumbs(taskName = task.name, state = state)
         var sheetVisible by remember(task.taskId) { mutableStateOf(false) }
         LaunchedEffect(task.taskId) {
             sheetVisible = false
@@ -525,79 +600,106 @@ class TaskEditorGlobalOverlay(
                             onClick = {},
                         ),
                 ) {
-                    AnimatedContent(
-                        targetState = editingNodeId,
-                        transitionSpec = {
-                            if (targetState != null && initialState == null) {
-                                (
-                                    slideInHorizontally(
-                                        animationSpec = tween(260, easing = FastOutSlowInEasing),
-                                        initialOffsetX = { fullWidth -> fullWidth / 3 },
-                                    ) + fadeIn(animationSpec = tween(220))
-                                    ) togetherWith (
-                                    slideOutHorizontally(
-                                        animationSpec = tween(220, easing = FastOutSlowInEasing),
-                                        targetOffsetX = { fullWidth -> -fullWidth / 5 },
-                                    ) + fadeOut(animationSpec = tween(180))
-                                    )
-                            } else {
-                                (
-                                    slideInHorizontally(
-                                        animationSpec = tween(240, easing = FastOutSlowInEasing),
-                                        initialOffsetX = { fullWidth -> -fullWidth / 4 },
-                                    ) + fadeIn(animationSpec = tween(200))
-                                    ) togetherWith (
-                                    slideOutHorizontally(
-                                        animationSpec = tween(200, easing = FastOutSlowInEasing),
-                                        targetOffsetX = { fullWidth -> fullWidth / 4 },
-                                    ) + fadeOut(animationSpec = tween(160))
-                                    )
-                            }
-                        },
-                        label = "overlay_page_switch",
-                    ) { targetNodeId ->
-                        if (targetNodeId == null) {
-                            ActionListScreen(
-                                taskName = task.name,
-                                state = state,
-                                onAddAction = {
-                                    mutateStore("已添加动作") { it.addActionNode() }
-                                },
-                                onTogglePreview = {
-                                    previewVisible = !previewVisible
-                                    touchEditor()
-                                },
-                                onSave = {
-                                    persistCurrentTask("已保存")
-                                },
-                                onEditNode = { nodeId ->
-                                    store.selectNode(nodeId)
-                                    editingNodeId = nodeId
-                                    touchEditor()
-                                },
-                                onClose = { hide() },
+                    val detailVisible = editingNodeId != null
+                    val baseScale by animateFloatAsState(
+                        targetValue = if (detailVisible) 0.965f else 1f,
+                        animationSpec = tween(durationMillis = 260, easing = FastOutSlowInEasing),
+                        label = "stack_base_scale",
+                    )
+                    val baseDimAlpha by animateFloatAsState(
+                        targetValue = if (detailVisible) 0.1f else 0f,
+                        animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
+                        label = "stack_base_dim",
+                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .graphicsLayer {
+                                scaleX = baseScale
+                                scaleY = baseScale
+                            },
+                    ) {
+                        ActionListScreen(
+                            breadcrumbs = breadcrumbs,
+                            taskName = task.name,
+                            state = state,
+                            onAddAction = {
+                                mutateStore("已添加动作") { it.addActionNode() }
+                            },
+                            onTogglePreview = {
+                                previewVisible = !previewVisible
+                                touchEditor()
+                            },
+                            onSave = {
+                                persistCurrentTask("已保存")
+                            },
+                            onEditNode = { nodeId ->
+                                store.selectNode(nodeId)
+                                pushRoute(OverlayRoute.NodeEditor(nodeId))
+                            },
+                            onNavigateByBreadcrumb = { depth ->
+                                popToRouteDepth(depth)
+                            },
+                            onClose = { hide() },
+                        )
+                        if (baseDimAlpha > 0f) {
+                            Box(
+                                modifier = Modifier
+                                    .matchParentSize()
+                                    .background(MaterialTheme.colorScheme.scrim.copy(alpha = baseDimAlpha)),
                             )
-                        } else {
+                        }
+                    }
+
+                    AnimatedVisibility(
+                        visible = detailVisible,
+                        enter = fadeIn(
+                            animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
+                        ) + slideInVertically(
+                            animationSpec = tween(durationMillis = 280, easing = FastOutSlowInEasing),
+                            initialOffsetY = { fullHeight -> fullHeight / 4 },
+                        ),
+                        exit = fadeOut(
+                            animationSpec = tween(durationMillis = 140, easing = FastOutSlowInEasing),
+                        ) + slideOutVertically(
+                            animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
+                            targetOffsetY = { fullHeight -> fullHeight / 5 },
+                        ),
+                        modifier = Modifier.fillMaxSize(),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null,
+                                    onClick = {},
+                                ),
+                        ) {
                             NodeEditScreen(
+                                breadcrumbs = breadcrumbs,
                                 state = state,
+                                scaffoldModifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(top = 20.dp),
                                 onBack = {
-                                    editingNodeId = null
-                                    touchEditor()
+                                    popRoute()
+                                },
+                                onNavigateByBreadcrumb = { depth ->
+                                    popToRouteDepth(depth)
                                 },
                                 onClose = { hide() },
                                 onDelete = {
                                     mutateStore("已删除动作") {
                                         it.removeSelectedNode()
                                     }
-                                    editingNodeId = null
-                                    touchEditor()
+                                    popRoute()
                                 },
                                 onSave = {
                                     persistCurrentTask("已保存")
                                 },
                                 onDone = {
-                                    editingNodeId = null
-                                    touchEditor()
+                                    popRoute()
                                 },
                                 onUpdateNodeKind = { kind ->
                                     val editingId = editingNodeId
@@ -648,12 +750,14 @@ class TaskEditorGlobalOverlay(
 
     @Composable
     private fun ActionListScreen(
+        breadcrumbs: List<BreadcrumbItem>,
         taskName: String,
         state: TaskGraphEditorState,
         onAddAction: () -> Unit,
         onTogglePreview: () -> Unit,
         onSave: () -> Unit,
         onEditNode: (String) -> Unit,
+        onNavigateByBreadcrumb: (Int) -> Unit,
         onClose: () -> Unit,
     ) {
         val flow = state.selectedFlow
@@ -661,6 +765,8 @@ class TaskEditorGlobalOverlay(
         OverlayDialogScaffold(
             title = "任务动作",
             showBack = false,
+            breadcrumbs = breadcrumbs,
+            onBreadcrumbNavigate = onNavigateByBreadcrumb,
             headerActions = listOf(
                 OverlayAction(
                     text = if (previewVisible) "隐藏预览" else "查看预览",
@@ -731,8 +837,11 @@ class TaskEditorGlobalOverlay(
 
     @Composable
     private fun NodeEditScreen(
+        breadcrumbs: List<BreadcrumbItem>,
         state: TaskGraphEditorState,
+        scaffoldModifier: Modifier = Modifier,
         onBack: () -> Unit,
+        onNavigateByBreadcrumb: (Int) -> Unit,
         onClose: () -> Unit,
         onDelete: () -> Unit,
         onSave: () -> Unit,
@@ -751,6 +860,9 @@ class TaskEditorGlobalOverlay(
             OverlayDialogScaffold(
                 title = "编辑动作",
                 showBack = true,
+                breadcrumbs = breadcrumbs,
+                onBreadcrumbNavigate = onNavigateByBreadcrumb,
+                modifier = scaffoldModifier,
                 onBack = onBack,
                 onClose = onClose,
             ) {
@@ -767,6 +879,9 @@ class TaskEditorGlobalOverlay(
         OverlayDialogScaffold(
             title = "编辑动作: ${node.nodeId}",
             showBack = true,
+            breadcrumbs = breadcrumbs,
+            onBreadcrumbNavigate = onNavigateByBreadcrumb,
+            modifier = scaffoldModifier,
             headerActions = listOf(
                 OverlayAction("填充默认值", style = OverlayButtonStyle.TONAL, onClick = onFillDefaults),
             ),
@@ -914,6 +1029,9 @@ class TaskEditorGlobalOverlay(
     private fun OverlayDialogScaffold(
         title: String,
         showBack: Boolean,
+        breadcrumbs: List<BreadcrumbItem> = emptyList(),
+        onBreadcrumbNavigate: ((Int) -> Unit)? = null,
+        modifier: Modifier = Modifier,
         headerActions: List<OverlayAction> = emptyList(),
         footerActions: List<OverlayAction> = emptyList(),
         onBack: () -> Unit,
@@ -921,7 +1039,7 @@ class TaskEditorGlobalOverlay(
         content: @Composable () -> Unit,
     ) {
         Card(
-            modifier = Modifier
+            modifier = modifier
                 .fillMaxSize()
                 .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(14.dp)),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -946,14 +1064,8 @@ class TaskEditorGlobalOverlay(
                         text = title,
                         style = MaterialTheme.typography.titleMedium,
                         modifier = Modifier.weight(1f),
+                        maxLines = 1,
                     )
-                    headerActions.forEach { action ->
-                        DialogButton(
-                            text = action.text,
-                            style = action.style,
-                            onClick = action.onClick,
-                        )
-                    }
                     DialogButton(
                         text = "关闭",
                         style = OverlayButtonStyle.OUTLINE,
@@ -962,6 +1074,66 @@ class TaskEditorGlobalOverlay(
                 }
 
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f))
+                if (headerActions.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        headerActions.forEach { action ->
+                            DialogButton(
+                                text = action.text,
+                                style = action.style,
+                                onClick = action.onClick,
+                            )
+                        }
+                    }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f))
+                }
+                if (breadcrumbs.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        breadcrumbs.forEachIndexed { index, crumb ->
+                            val isLast = index == breadcrumbs.lastIndex
+                            if (isLast || onBreadcrumbNavigate == null) {
+                                Text(
+                                    text = crumb.label,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (isLast) {
+                                        MaterialTheme.colorScheme.onSurface
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
+                                    fontWeight = if (isLast) FontWeight.Medium else FontWeight.Normal,
+                                )
+                            } else {
+                                Text(
+                                    text = crumb.label,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.clickable { onBreadcrumbNavigate(crumb.routeDepth) },
+                                )
+                            }
+                            if (!isLast) {
+                                Text(
+                                    text = "/",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f))
+                }
 
                 Column(
                     modifier = Modifier

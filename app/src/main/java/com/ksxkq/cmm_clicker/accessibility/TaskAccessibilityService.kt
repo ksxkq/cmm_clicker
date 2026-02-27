@@ -58,6 +58,10 @@ class TaskAccessibilityService : AccessibilityService() {
             context = this,
             scope = serviceScope,
         )
+        taskControlPanelGlobalOverlay = TaskControlPanelGlobalOverlay(
+            context = this,
+            scope = serviceScope,
+        )
         isConnected = true
         Log.d("TaskAccessibility", "onServiceConnected")
     }
@@ -78,6 +82,8 @@ class TaskAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         taskEditorGlobalOverlay?.hide(animate = false)
         taskEditorGlobalOverlay = null
+        taskControlPanelGlobalOverlay?.hide()
+        taskControlPanelGlobalOverlay = null
         gestureFeedbackOverlay?.dispose()
         gestureFeedbackOverlay = null
         serviceScope.cancel()
@@ -91,6 +97,7 @@ class TaskAccessibilityService : AccessibilityService() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var gestureFeedbackOverlay: GestureFeedbackOverlay? = null
     private var taskEditorGlobalOverlay: TaskEditorGlobalOverlay? = null
+    private var taskControlPanelGlobalOverlay: TaskControlPanelGlobalOverlay? = null
 
     fun showClickFeedback(x: Float, y: Float) {
         gestureFeedbackOverlay?.showClick(x = x, y = y)
@@ -117,5 +124,15 @@ class TaskAccessibilityService : AccessibilityService() {
 
     fun hideTaskEditorOverlay() {
         taskEditorGlobalOverlay?.hide()
+    }
+
+    fun showTaskControlPanelOverlay(): Boolean {
+        val overlay = taskControlPanelGlobalOverlay ?: return false
+        overlay.show()
+        return true
+    }
+
+    fun hideTaskControlPanelOverlay() {
+        taskControlPanelGlobalOverlay?.hide()
     }
 }

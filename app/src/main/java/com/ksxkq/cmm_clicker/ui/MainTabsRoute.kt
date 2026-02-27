@@ -32,6 +32,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.StrokeCap
@@ -73,6 +74,8 @@ fun MainTabsRoute(
     onOpenAccessibilitySettings: () -> Unit,
     onAutoEnableAccessibility: () -> Unit,
     onRefreshStatus: () -> Unit,
+    onShowControlPanel: () -> Unit,
+    onHideControlPanel: () -> Unit,
     onDryRunChanged: (Boolean) -> Unit,
     onDoSwipeBranchChanged: (Boolean) -> Unit,
     onRunCurrentTask: () -> Unit,
@@ -146,6 +149,8 @@ fun MainTabsRoute(
                     onOpenAccessibilitySettings = onOpenAccessibilitySettings,
                     onAutoEnableAccessibility = onAutoEnableAccessibility,
                     onRefreshStatus = onRefreshStatus,
+                    onShowControlPanel = onShowControlPanel,
+                    onHideControlPanel = onHideControlPanel,
                     onDryRunChanged = onDryRunChanged,
                     onDoSwipeBranchChanged = onDoSwipeBranchChanged,
                     onRunCurrentTask = onRunCurrentTask,
@@ -220,6 +225,7 @@ private fun IosTabBarItem(
     Row(
         modifier = modifier
             .height(46.dp)
+            .clip(RoundedCornerShape(22.dp))
             .background(color = bgColor, shape = RoundedCornerShape(22.dp))
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp),

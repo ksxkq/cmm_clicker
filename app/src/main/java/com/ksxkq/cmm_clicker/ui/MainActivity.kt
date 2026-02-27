@@ -96,6 +96,18 @@ class MainActivity : ComponentActivity() {
                         onOpenAccessibilitySettings = { openAccessibilitySettings() },
                         onAutoEnableAccessibility = { autoEnableAccessibilityService() },
                         onRefreshStatus = { refreshPermissionStatus(attemptAutoEnable = true) },
+                        onShowControlPanel = {
+                            val opened = TaskAccessibilityService.instance?.showTaskControlPanelOverlay() == true
+                            taskOperationMessage = if (opened) {
+                                "操作面板已打开"
+                            } else {
+                                "辅助服务未连接，无法打开操作面板"
+                            }
+                        },
+                        onHideControlPanel = {
+                            TaskAccessibilityService.instance?.hideTaskControlPanelOverlay()
+                            taskOperationMessage = "操作面板已关闭"
+                        },
                         onDryRunChanged = { dryRun = it },
                         onDoSwipeBranchChanged = { doSwipeBranch = it },
                         onRunCurrentTask = { runCurrentTask() },

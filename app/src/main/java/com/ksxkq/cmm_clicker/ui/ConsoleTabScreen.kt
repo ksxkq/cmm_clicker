@@ -27,6 +27,8 @@ fun ConsoleTabScreen(
     onOpenAccessibilitySettings: () -> Unit,
     onAutoEnableAccessibility: () -> Unit,
     onRefreshStatus: () -> Unit,
+    onShowControlPanel: () -> Unit,
+    onHideControlPanel: () -> Unit,
     onDryRunChanged: (Boolean) -> Unit,
     onDoSwipeBranchChanged: (Boolean) -> Unit,
     onRunCurrentTask: () -> Unit,
@@ -69,6 +71,8 @@ fun ConsoleTabScreen(
         ActionButton(text = "自动开启辅助服务", enabled = canWriteSecureSettings, onClick = onAutoEnableAccessibility)
         ActionButton(text = "打开辅助服务设置", onClick = onOpenAccessibilitySettings)
         ActionButton(text = "刷新状态", onClick = onRefreshStatus)
+        ActionButton(text = "打开操作面板", enabled = accessibilityServiceConnected, onClick = onShowControlPanel)
+        ActionButton(text = "关闭操作面板", enabled = accessibilityServiceConnected, onClick = onHideControlPanel)
         SwitchRow(
             title = "Dry Run（不真实点击）",
             checked = dryRun,

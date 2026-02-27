@@ -1,7 +1,6 @@
 package com.ksxkq.cmm_clicker.ui
 
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -56,6 +55,34 @@ fun TaskTabScreen(
     onDeleteTask: (String) -> Unit,
     onRunTask: (String) -> Unit,
 ) {
+    TaskLibraryPanel(
+        tasks = tasks,
+        running = running,
+        taskOperationMessage = taskOperationMessage,
+        onCreateTask = onCreateTask,
+        onTaskCardClick = onOpenTaskOverlay,
+        onRenameTask = onRenameTask,
+        onDuplicateTask = onDuplicateTask,
+        onDeleteTask = onDeleteTask,
+        onRunTask = onRunTask,
+    )
+}
+
+@Composable
+fun TaskLibraryPanel(
+    tasks: List<TaskRecord>,
+    running: Boolean,
+    taskOperationMessage: String,
+    onCreateTask: (String) -> Unit,
+    onTaskCardClick: (String) -> Unit,
+    onRenameTask: (String, String) -> Unit,
+    onDuplicateTask: (String) -> Unit,
+    onDeleteTask: (String) -> Unit,
+    onRunTask: (String) -> Unit,
+    showRunAction: Boolean = true,
+    showManageMenu: Boolean = true,
+    showCreateControls: Boolean = true,
+) {
     var newTaskName by remember { mutableStateOf("") }
     var searchKeyword by remember { mutableStateOf("") }
     var segment by remember { mutableStateOf(TaskLibrarySegment.ALL) }
@@ -92,25 +119,27 @@ fun TaskTabScreen(
             "匹配 ${filteredTasks.size} / ${tasks.size}"
         },
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            OutlinedTextField(
-                value = newTaskName,
-                onValueChange = { newTaskName = it },
-                modifier = Modifier.weight(1f),
-                label = { Text("新任务名称") },
-                singleLine = true,
-            )
-            Button(
-                onClick = {
-                    onCreateTask(newTaskName)
-                    newTaskName = ""
-                },
+        if (showCreateControls) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("新建")
+                OutlinedTextField(
+                    value = newTaskName,
+                    onValueChange = { newTaskName = it },
+                    modifier = Modifier.weight(1f),
+                    label = { Text("新任务名称") },
+                    singleLine = true,
+                )
+                Button(
+                    onClick = {
+                        onCreateTask(newTaskName)
+                        newTaskName = ""
+                    },
+                ) {
+                    Text("新建")
+                }
             }
         }
         OutlinedTextField(
@@ -152,9 +181,8 @@ fun TaskTabScreen(
         } else {
             filteredTasks.forEach { task ->
                 Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onOpenTaskOverlay(task.taskId) },
+                    onClick = { onTaskCardClick(task.taskId) },
+                    modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                     border = BorderStroke(
                         width = 1.dp,
@@ -172,11 +200,11 @@ fun TaskTabScreen(
                                 .padding(bottom = 44.dp),
                             verticalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
-                            Text(
-                                text = task.name,
-                                style = MaterialTheme.typography.titleMedium,
-                                modifier = Modifier.padding(end = 44.dp),
-                            )
+                                Text(
+                                    text = task.name,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    modifier = Modifier.padding(end = if (showManageMenu) 44.dp else 0.dp),
+                                )
                             Text(
                                 text = "更新时间: ${formatEpochMs(task.updatedAtEpochMs)}",
                                 style = MaterialTheme.typography.bodySmall,
@@ -189,68 +217,72 @@ fun TaskTabScreen(
                             )
                         }
 
-                        Box(
-                            modifier = Modifier
-                                .align(Alignment.TopEnd)
-                                .padding(12.dp),
-                        ) {
-                            CircleActionIconButton(
-                                onClick = { menuTaskId = task.taskId },
-                                icon = { tint ->
-                                    Icon(
-                                        imageVector = Icons.Rounded.MoreHoriz,
-                                        contentDescription = "更多",
-                                        tint = tint,
-                                        modifier = Modifier.size(18.dp),
-                                    )
-                                },
-                            )
-                            AppDropdownMenu(
-                                expanded = menuTaskId == task.taskId,
-                                onDismissRequest = { menuTaskId = null },
+                        if (showManageMenu) {
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(12.dp),
                             ) {
-                                AppDropdownMenuItem(
-                                    text = "复制",
-                                    onClick = {
-                                        menuTaskId = null
-                                        onDuplicateTask(task.taskId)
+                                CircleActionIconButton(
+                                    onClick = { menuTaskId = task.taskId },
+                                    icon = { tint ->
+                                        Icon(
+                                            imageVector = Icons.Rounded.MoreHoriz,
+                                            contentDescription = "更多",
+                                            tint = tint,
+                                            modifier = Modifier.size(18.dp),
+                                        )
                                     },
                                 )
-                                AppDropdownMenuItem(
-                                    text = "重命名",
-                                    onClick = {
-                                        menuTaskId = null
-                                        renameTaskId = task.taskId
-                                        renameTaskName = task.name
-                                    },
-                                )
-                                AppDropdownMenuItem(
-                                    text = "删除",
-                                    destructive = true,
-                                    onClick = {
-                                        menuTaskId = null
-                                        pendingDeleteTaskId = task.taskId
-                                    },
-                                )
+                                AppDropdownMenu(
+                                    expanded = menuTaskId == task.taskId,
+                                    onDismissRequest = { menuTaskId = null },
+                                ) {
+                                    AppDropdownMenuItem(
+                                        text = "复制",
+                                        onClick = {
+                                            menuTaskId = null
+                                            onDuplicateTask(task.taskId)
+                                        },
+                                    )
+                                    AppDropdownMenuItem(
+                                        text = "重命名",
+                                        onClick = {
+                                            menuTaskId = null
+                                            renameTaskId = task.taskId
+                                            renameTaskName = task.name
+                                        },
+                                    )
+                                    AppDropdownMenuItem(
+                                        text = "删除",
+                                        destructive = true,
+                                        onClick = {
+                                            menuTaskId = null
+                                            pendingDeleteTaskId = task.taskId
+                                        },
+                                    )
+                                }
                             }
                         }
 
-                        CircleActionIconButton(
-                            modifier = Modifier
-                                .align(Alignment.BottomEnd)
-                                .padding(12.dp),
-                            enabled = !running,
-                            filled = true,
-                            onClick = { onRunTask(task.taskId) },
-                            icon = { tint ->
-                                Icon(
-                                    imageVector = Icons.Rounded.PlayArrow,
-                                    contentDescription = "运行",
-                                    tint = tint,
-                                    modifier = Modifier.size(16.dp),
-                                )
-                            },
-                        )
+                        if (showRunAction) {
+                            CircleActionIconButton(
+                                modifier = Modifier
+                                    .align(Alignment.BottomEnd)
+                                    .padding(12.dp),
+                                enabled = !running,
+                                filled = true,
+                                onClick = { onRunTask(task.taskId) },
+                                icon = { tint ->
+                                    Icon(
+                                        imageVector = Icons.Rounded.PlayArrow,
+                                        contentDescription = "运行",
+                                        tint = tint,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                },
+                            )
+                        }
                     }
                 }
             }

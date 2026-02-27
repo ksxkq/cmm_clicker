@@ -17,6 +17,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -578,7 +579,7 @@ class TaskEditorGlobalOverlay(
             }
         }
         val scrimAlpha by animateFloatAsState(
-            targetValue = if (sheetVisible) 0.24f else 0f,
+            targetValue = if (sheetVisible) OverlayStackMotion.SHEET_SCRIM_ALPHA else 0f,
             animationSpec = tween(
                 durationMillis = OverlayMotion.SCRIM_DURATION_MS,
                 easing = FastOutSlowInEasing,
@@ -637,8 +638,8 @@ class TaskEditorGlobalOverlay(
                 ),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .fillMaxHeight(0.9f)
-                    .widthIn(max = 520.dp),
+                    .fillMaxHeight(OverlayStackMotion.SHEET_HEIGHT_FRACTION)
+                    .widthIn(max = OverlayStackMotion.SHEET_MAX_WIDTH_DP.dp),
             ) {
                 Box(
                     modifier = Modifier
@@ -651,14 +652,14 @@ class TaskEditorGlobalOverlay(
                 ) {
                     val detailVisible = detailLayerVisible
                     val baseScale by animateFloatAsState(
-                        targetValue = if (detailVisible) 0.965f else 1f,
+                        targetValue = if (detailVisible) OverlayStackMotion.PREVIOUS_LAYER_SCALE else 1f,
                         animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
                         label = "stack_base_scale",
                     )
-                    val baseDimAlpha by animateFloatAsState(
-                        targetValue = if (detailVisible) 0.1f else 0f,
-                        animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
-                        label = "stack_base_dim",
+                    val baseTranslateY by animateFloatAsState(
+                        targetValue = if (detailVisible) OverlayStackMotion.PREVIOUS_LAYER_TRANSLATE_Y else 0f,
+                        animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
+                        label = "stack_base_translate_y",
                     )
                     Box(
                         modifier = Modifier
@@ -666,6 +667,7 @@ class TaskEditorGlobalOverlay(
                             .graphicsLayer {
                                 scaleX = baseScale
                                 scaleY = baseScale
+                                translationY = baseTranslateY
                             },
                     ) {
                         ActionListScreen(
@@ -700,13 +702,6 @@ class TaskEditorGlobalOverlay(
                             },
                             onClose = { hide() },
                         )
-                        if (baseDimAlpha > 0f) {
-                            Box(
-                                modifier = Modifier
-                                    .matchParentSize()
-                                    .background(MaterialTheme.colorScheme.scrim.copy(alpha = baseDimAlpha)),
-                            )
-                        }
                     }
 
                     AnimatedVisibility(
@@ -718,7 +713,9 @@ class TaskEditorGlobalOverlay(
                                 dampingRatio = 0.9f,
                                 stiffness = Spring.StiffnessLow,
                             ),
-                            initialOffsetY = { fullHeight -> (fullHeight * 0.22f).roundToInt() },
+                            initialOffsetY = { fullHeight ->
+                                (fullHeight * OverlayStackMotion.ENTER_OFFSET_RATIO).roundToInt()
+                            },
                         ),
                         exit = fadeOut(
                             animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
@@ -727,7 +724,9 @@ class TaskEditorGlobalOverlay(
                                 dampingRatio = 0.95f,
                                 stiffness = Spring.StiffnessMediumLow,
                             ),
-                            targetOffsetY = { fullHeight -> (fullHeight * 0.18f).roundToInt() },
+                            targetOffsetY = { fullHeight ->
+                                (fullHeight * OverlayStackMotion.EXIT_OFFSET_RATIO).roundToInt()
+                            },
                         ),
                         modifier = Modifier.fillMaxSize(),
                     ) {
@@ -1386,11 +1385,13 @@ class TaskEditorGlobalOverlay(
         onClose: () -> Unit,
         content: @Composable () -> Unit,
     ) {
+        val cardShape = RoundedCornerShape(14.dp)
         Card(
             modifier = modifier
-                .fillMaxSize()
-                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(14.dp)),
+                .fillMaxSize(),
+            shape = cardShape,
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
             elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
         ) {
             Column(modifier = Modifier.fillMaxSize()) {

@@ -1,6 +1,6 @@
 # UI 主题系统说明（黑白极简）
 
-更新时间：2026-02-26
+更新时间：2026-02-27
 
 ## 1. 设计目标
 
@@ -16,7 +16,8 @@
 4. `app/src/main/java/com/ksxkq/cmm_clicker/ui/theme/ThemePreferenceStore.kt`
 5. `app/src/main/java/com/ksxkq/cmm_clicker/ui/MainActivity.kt`
 6. `app/src/main/java/com/ksxkq/cmm_clicker/accessibility/TaskEditorGlobalOverlay.kt`
-7. `app/src/main/res/values/themes.xml`
+7. `app/src/main/java/com/ksxkq/cmm_clicker/ui/MainUiComponents.kt`
+8. `app/src/main/res/values/themes.xml`
 
 ## 3. 主题模式
 
@@ -56,6 +57,13 @@
 6. 弹窗动效优先：浮窗默认使用背景渐暗 + 内容上滑的组合动效，后续交互沿用同一动画节奏。
 7. 浮窗遮罩保持半透明并覆盖状态栏区域，避免出现不透明灰底或顶部漏光。
 8. 弹窗支持点击遮罩关闭，并使用退出动效后再移除窗口，避免交互突兀。
+9. 首页使用 `Scaffold` 管理安全区内边距，保证边到边模式下内容不被状态栏覆盖。
+10. 首页导航采用底部导航栏（任务/控制台），导航组件与页面内容共享同一 `CmmClickerTheme` 令牌。
+11. 任务页/控制台页拆分后仍复用同一套 `SectionCard/ActionButton/SwitchRow` 组件，避免样式分叉。
+12. 首页底部导航已替换为自定义 iOS 风格浮动胶囊 Tab Bar（非 Material 默认样式），图标使用 Compose 自绘，仍遵循主题色令牌。
+13. 菜单样式通过 `AppDropdownMenu` 统一（圆角、边框、低阴影、文本色），任务卡片/后续页面复用，避免 Material 默认菜单风格漂移。
+14. 任务卡片操作图标已接入标准库 `material-icons-extended`（运行/更多），统一由 `CircleActionIconButton + Material Icon` 组合渲染。
+15. 圆形 icon 按钮统一启用 `clip(CircleShape)`，保证触摸反馈区域与视觉形状一致。
 
 ## 6. 后续扩展建议
 

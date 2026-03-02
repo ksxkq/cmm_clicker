@@ -28,6 +28,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -39,14 +40,14 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.FiberManualRecord
 import androidx.compose.material.icons.rounded.Pause
@@ -78,6 +79,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.AndroidUiDispatcher
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.core.view.ViewCompat
 import androidx.lifecycle.Lifecycle
@@ -137,6 +139,7 @@ class TaskControlPanelGlobalOverlay(
         private const val RECORDING_SAVE_DIALOG_ENTER_DELAY_MS = 18L
         private const val AUX_OVERLAY_SCRIM_ALPHA = 0.5f
         private const val AUX_OVERLAY_SCRIM_FADE_MS = 220
+        private const val CLICK_PICKER_SCRIM_ALPHA = 0.08f
     }
 
     private data class RecordedStroke(
@@ -237,6 +240,10 @@ class TaskControlPanelGlobalOverlay(
     private var removeSettingsOverlayAfterRecordingDialogExit = false
     private var removeSettingsOverlayAfterStartConfirmDialogExit = false
     private var pendingSettingsOverlayRemoval = false
+    private var clickPickerVisible by mutableStateOf(false)
+    private var clickPickerNodeId by mutableStateOf<String?>(null)
+    private var clickPickerX by mutableStateOf(0f)
+    private var clickPickerY by mutableStateOf(0f)
     private var panelOffsetX by mutableIntStateOf(dp(18))
     private var panelOffsetY by mutableIntStateOf(dp(220))
     private var selectedTaskId by mutableStateOf(prefs.getString(KEY_SELECTED_TASK_ID, null))
@@ -245,40 +252,75 @@ class TaskControlPanelGlobalOverlay(
 
     fun show() {
         scope.launch {
-            val mode = runCatching { themePreferenceStore.themeModeFlow.first() }
-                .getOrDefault(AppThemeMode.MONO_LIGHT)
-            themeMode = mode
-            loadTasks()
-            overlayVisible = true
-            settingsVisible = false
-            settingsSheetVisible = false
-            settingsDismissAnimating = false
-            settingsRoute = SettingsRoute.TaskList
-            settingsTask = null
-            settingsEditorStore = null
-            recordingSaveDialogVisible = false
-            recordingSaveTaskName = ""
-            startTaskConfirmDialogVisible = false
-            startTaskConfirmTaskName = ""
-            startTaskConfirmDialogOpenToken = 0
-            startTaskConfirmDialogAnimatingOut = false
-            recordingSaveDialogOpenToken = 0
-            recordingSaveDialogAnimatingOut = false
-            removeSettingsOverlayAfterRecordingDialogExit = false
-            removeSettingsOverlayAfterStartConfirmDialogExit = false
-            pendingSettingsOverlayRemoval = false
-            panelMode = PanelMode.NORMAL
-            recordingPaused = false
-            replayingGesture = false
-            recordedGestures.clear()
-            recordedStepCount = 0
-            stopRecordingTicker(resetElapsed = true)
-            panelDismissAnimating = false
-            panelNeedsEntryAnimation = true
-            panelAnimationToken++
-            ensureOverlayView()
-            updateOverlayLayout()
-            startThemeSync()
+            initializePanelState(
+                openSettings = false,
+                preferredTaskId = null,
+            )
+        }
+    }
+
+    fun showSettingsPanel(preferredTaskId: String? = null) {
+        scope.launch {
+            initializePanelState(
+                openSettings = true,
+                preferredTaskId = preferredTaskId,
+            )
+        }
+    }
+
+    private suspend fun initializePanelState(
+        openSettings: Boolean,
+        preferredTaskId: String?,
+    ) {
+        val mode = runCatching { themePreferenceStore.themeModeFlow.first() }
+            .getOrDefault(AppThemeMode.MONO_LIGHT)
+        themeMode = mode
+        loadTasks()
+        if (preferredTaskId != null && tasks.any { it.taskId == preferredTaskId }) {
+            selectedTaskId = preferredTaskId
+            persistIds()
+        }
+        overlayVisible = true
+        settingsVisible = openSettings
+        settingsSheetVisible = false
+        settingsDismissAnimating = false
+        settingsRoute = SettingsRoute.TaskList
+        settingsTask = null
+        settingsEditorStore = null
+        recordingSaveDialogVisible = false
+        recordingSaveTaskName = ""
+        startTaskConfirmDialogVisible = false
+        startTaskConfirmTaskName = ""
+        startTaskConfirmDialogOpenToken = 0
+        startTaskConfirmDialogAnimatingOut = false
+        recordingSaveDialogOpenToken = 0
+        recordingSaveDialogAnimatingOut = false
+        removeSettingsOverlayAfterRecordingDialogExit = false
+        removeSettingsOverlayAfterStartConfirmDialogExit = false
+        pendingSettingsOverlayRemoval = false
+        clickPickerVisible = false
+        clickPickerNodeId = null
+        clickPickerX = 0f
+        clickPickerY = 0f
+        panelMode = PanelMode.NORMAL
+        recordingPaused = false
+        replayingGesture = false
+        recordedGestures.clear()
+        recordedStepCount = 0
+        stopRecordingTicker(resetElapsed = true)
+        panelDismissAnimating = false
+        panelNeedsEntryAnimation = true
+        panelAnimationToken++
+        ensureOverlayView()
+        updateOverlayLayout()
+        if (openSettings) {
+            ensureSettingsOverlayView()
+        }
+        startThemeSync()
+        touchUi()
+        if (openSettings) {
+            delay(16)
+            settingsSheetVisible = true
             touchUi()
         }
     }
@@ -449,6 +491,10 @@ class TaskControlPanelGlobalOverlay(
         removeSettingsOverlayAfterRecordingDialogExit = false
         removeSettingsOverlayAfterStartConfirmDialogExit = false
         pendingSettingsOverlayRemoval = false
+        clickPickerVisible = false
+        clickPickerNodeId = null
+        clickPickerX = 0f
+        clickPickerY = 0f
     }
 
     private fun removeOverlay() {
@@ -486,6 +532,10 @@ class TaskControlPanelGlobalOverlay(
         removeSettingsOverlayAfterRecordingDialogExit = false
         removeSettingsOverlayAfterStartConfirmDialogExit = false
         pendingSettingsOverlayRemoval = false
+        clickPickerVisible = false
+        clickPickerNodeId = null
+        clickPickerX = 0f
+        clickPickerY = 0f
         recordedGestures.clear()
         recordedStepCount = 0
         stopRecordingTicker(resetElapsed = true)
@@ -701,6 +751,10 @@ class TaskControlPanelGlobalOverlay(
     }
 
     private fun onAuxOverlayBackdropTap() {
+        if (clickPickerVisible) {
+            closeClickPositionPicker()
+            return
+        }
         if (recordingSaveDialogVisible) {
             discardRecordingSession("已取消保存")
             return
@@ -726,22 +780,21 @@ class TaskControlPanelGlobalOverlay(
         }
     }
 
-    private fun openTaskEditorInSettings(taskId: String) {
+    private fun openTaskEditorOverlay(taskId: String) {
+        selectedTaskId = taskId
+        persistIds()
         scope.launch {
-            val task = withContext(Dispatchers.IO) {
-                taskRepository.getTask(taskId)
-            }
+            val task = withContext(Dispatchers.IO) { taskRepository.getTask(taskId) }
             if (task == null) {
-                statusText = "任务不存在"
+                statusText = "无法打开任务编辑器，任务不存在或读取失败"
                 touchUi()
                 return@launch
             }
-            selectedTaskId = task.taskId
-            persistIds()
             settingsTask = task
             settingsEditorStore = TaskGraphEditorStore(initialBundle = task.bundle)
             settingsRoute = SettingsRoute.ActionList
-            statusText = "正在编辑：${task.name}"
+            settingsSheetVisible = true
+            statusText = "已进入任务编辑"
             touchUi()
         }
     }
@@ -1009,6 +1062,7 @@ class TaskControlPanelGlobalOverlay(
             !recordingSaveDialogAnimatingOut &&
             !startTaskConfirmDialogVisible &&
             !startTaskConfirmDialogAnimatingOut &&
+            !clickPickerVisible &&
             !pendingSettingsOverlayRemoval
         ) {
             return
@@ -1053,15 +1107,19 @@ class TaskControlPanelGlobalOverlay(
         ) {
             LaunchedEffect(Unit) { onStartTaskConfirmDialogExitAnimationSettled() }
         }
-        val sheetVisible = settingsVisible && settingsSheetVisible
-        val anyAuxContentVisible = sheetVisible ||
-            recordingDialogTransitionState.currentState ||
+        val effectiveSheetVisible = settingsVisible && settingsSheetVisible
+        val dialogVisible = recordingDialogTransitionState.currentState ||
             recordingDialogTransitionState.targetState ||
             startTaskDialogTransitionState.currentState ||
             startTaskDialogTransitionState.targetState
+        val anyAuxContentVisible = effectiveSheetVisible ||
+            dialogVisible ||
+            clickPickerVisible
         val route = settingsRoute
         val scrimTargetAlpha = when {
-            anyAuxContentVisible -> AUX_OVERLAY_SCRIM_ALPHA
+            clickPickerVisible -> CLICK_PICKER_SCRIM_ALPHA
+            dialogVisible -> AUX_OVERLAY_SCRIM_ALPHA
+            effectiveSheetVisible -> OverlayStackMotion.SHEET_SCRIM_ALPHA
             else -> 0f
         }
         val settingsScrimAlpha by animateFloatAsState(
@@ -1085,18 +1143,28 @@ class TaskControlPanelGlobalOverlay(
                     .clickable { onAuxOverlayBackdropTap() },
             )
             AnimatedVisibilityBox(
-                visible = sheetVisible,
+                visible = effectiveSheetVisible,
                 enter = fadeIn(
                     animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
                 ) + slideInVertically(
-                    animationSpec = tween(durationMillis = 260, easing = FastOutSlowInEasing),
-                    initialOffsetY = { fullHeight -> (fullHeight * 0.22f).roundToInt() },
+                    animationSpec = spring(
+                        dampingRatio = 0.9f,
+                        stiffness = Spring.StiffnessLow,
+                    ),
+                    initialOffsetY = { fullHeight ->
+                        (fullHeight * OverlayStackMotion.ENTER_OFFSET_RATIO).roundToInt()
+                    },
                 ),
                 exit = fadeOut(
                     animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
                 ) + slideOutVertically(
-                    animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
-                    targetOffsetY = { fullHeight -> (fullHeight * 0.12f).roundToInt() },
+                    animationSpec = spring(
+                        dampingRatio = 0.95f,
+                        stiffness = Spring.StiffnessMediumLow,
+                    ),
+                    targetOffsetY = { fullHeight ->
+                        (fullHeight * OverlayStackMotion.EXIT_OFFSET_RATIO).roundToInt()
+                    },
                 ),
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -1121,12 +1189,20 @@ class TaskControlPanelGlobalOverlay(
                         ),
                 ) {
                     val baseScale by animateFloatAsState(
-                        targetValue = if (showActionLayer) OverlayStackMotion.PREVIOUS_LAYER_SCALE else 1f,
+                        targetValue = if (showActionLayer) {
+                            OverlayStackMotion.PREVIOUS_LAYER_SCALE
+                        } else {
+                            1f
+                        },
                         animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
                         label = "settings_base_scale",
                     )
                     val baseTranslateY by animateFloatAsState(
-                        targetValue = if (showActionLayer) OverlayStackMotion.PREVIOUS_LAYER_TRANSLATE_Y else 0f,
+                        targetValue = if (showActionLayer) {
+                            OverlayStackMotion.PREVIOUS_LAYER_TRANSLATE_Y
+                        } else {
+                            0f
+                        },
                         animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
                         label = "settings_base_translate",
                     )
@@ -1136,7 +1212,7 @@ class TaskControlPanelGlobalOverlay(
                         exit = fadeOut(animationSpec = tween(durationMillis = 120)),
                         modifier = Modifier.fillMaxSize(),
                     ) {
-                        Card(
+                        SettingsTaskListLayer(
                             modifier = Modifier
                                 .fillMaxSize()
                                 .graphicsLayer {
@@ -1144,13 +1220,7 @@ class TaskControlPanelGlobalOverlay(
                                     scaleY = baseScale
                                     translationY = baseTranslateY
                                 },
-                            shape = RoundedCornerShape(20.dp),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-                        ) {
-                            Box(modifier = Modifier.fillMaxSize()) { SettingsTaskListLayer() }
-                        }
+                        )
                     }
 
                     androidx.compose.animation.AnimatedVisibility(
@@ -1201,7 +1271,7 @@ class TaskControlPanelGlobalOverlay(
                             ),
                             label = "settings_action_top_inset",
                         )
-                        Card(
+                        SettingsActionListLayer(
                             modifier = Modifier
                                 .fillMaxSize()
                                 .padding(top = actionTopInset.coerceAtLeast(0.dp))
@@ -1210,13 +1280,7 @@ class TaskControlPanelGlobalOverlay(
                                     scaleY = actionScale
                                     translationY = actionTranslateY
                                 },
-                            shape = RoundedCornerShape(18.dp),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                            elevation = CardDefaults.cardElevation(defaultElevation = 10.dp),
-                        ) {
-                            Box(modifier = Modifier.fillMaxSize()) { SettingsActionListLayer() }
-                        }
+                        )
                     }
 
                     androidx.compose.animation.AnimatedVisibility(
@@ -1246,17 +1310,12 @@ class TaskControlPanelGlobalOverlay(
                         modifier = Modifier.fillMaxSize(),
                     ) {
                         val nodeId = (route as? SettingsRoute.NodeEditor)?.nodeId.orEmpty()
-                        Card(
+                        SettingsNodeEditorLayer(
+                            nodeId = nodeId,
                             modifier = Modifier
                                 .fillMaxSize()
                                 .padding(top = OverlayStackMotion.FOREGROUND_LAYER_TOP_INSET_DP.dp),
-                            shape = RoundedCornerShape(18.dp),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                            elevation = CardDefaults.cardElevation(defaultElevation = 12.dp),
-                        ) {
-                            SettingsNodeEditorLayer(nodeId = nodeId)
-                        }
+                        )
                     }
                 }
             }
@@ -1295,6 +1354,9 @@ class TaskControlPanelGlobalOverlay(
                     .widthIn(max = 420.dp),
             ) {
                 StartTaskConfirmDialogCard()
+            }
+            if (clickPickerVisible) {
+                ClickPositionPickerLayer()
             }
         }
     }
@@ -1401,97 +1463,181 @@ class TaskControlPanelGlobalOverlay(
     }
 
     @Composable
-    private fun SettingsPageHeader(
-        title: String,
-        showBack: Boolean,
-        onBack: () -> Unit,
-        onClose: () -> Unit,
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
+    private fun ClickPositionPickerLayer() {
+        val bounds = windowManager.currentWindowMetrics.bounds
+        val width = bounds.width().coerceAtLeast(1)
+        val height = bounds.height().coerceAtLeast(1)
+        val maxX = (width - 1).coerceAtLeast(0).toFloat()
+        val maxY = (height - 1).coerceAtLeast(0).toFloat()
+        val pickerX = clickPickerX.coerceIn(0f, maxX)
+        val pickerY = clickPickerY.coerceIn(0f, maxY)
+        val markerRadiusPx = dp(14).toFloat()
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(width, height) {
+                    detectDragGestures { change, dragAmount ->
+                        change.consume()
+                        moveClickPickerByDelta(
+                            deltaX = dragAmount.x,
+                            deltaY = dragAmount.y,
+                        )
+                    }
+                },
         ) {
-            if (showBack) {
-                OutlinedButton(onClick = onBack) {
-                    Text("返回")
+            Card(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 18.dp, start = 16.dp, end = 16.dp)
+                    .fillMaxWidth()
+                    .widthIn(max = 420.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Text(
+                        text = "点击位置拾取（任意位置滑动）",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Text(
+                        text = "X=${pickerX.roundToInt()} px, Y=${pickerY.roundToInt()} px",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        text = "可在屏幕任意位置滑动来移动准星，也可拖动准星本体。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.weight(1f),
-            )
-            OutlinedButton(onClick = onClose) {
-                Text("关闭")
-            }
-        }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
-    }
 
-    @Composable
-    private fun SettingsTaskListLayer() {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            SettingsPageHeader(
-                title = "任务设置",
-                showBack = false,
-                onBack = {},
-                onClose = { closeSettingsPanel() },
-            )
             Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-                    .verticalScroll(rememberScrollState()),
+                    .offset {
+                        IntOffset(
+                            x = (pickerX - markerRadiusPx).roundToInt(),
+                            y = (pickerY - markerRadiusPx).roundToInt(),
+                        )
+                    }
+                    .size(28.dp)
+                    .border(
+                        width = 2.dp,
+                        color = MaterialTheme.colorScheme.primary,
+                        shape = CircleShape,
+                    )
             ) {
-                SettingsTaskListPage()
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .fillMaxWidth()
+                        .height(1.dp)
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)),
+                )
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .fillMaxHeight()
+                        .width(1.dp)
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)),
+                )
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .size(6.dp)
+                        .background(
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.75f),
+                            shape = CircleShape,
+                        ),
+                )
+            }
+
+            Card(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(horizontal = 16.dp, vertical = 20.dp)
+                    .fillMaxWidth()
+                    .widthIn(max = 420.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.98f),
+                ),
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    MaterialTheme.colorScheme.outline,
+                ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedButton(
+                        modifier = Modifier.weight(1f),
+                        onClick = { closeClickPositionPicker() },
+                    ) {
+                        Text("取消")
+                    }
+                    OutlinedButton(
+                        modifier = Modifier.weight(1f),
+                        onClick = { applyClickPositionPicker() },
+                    ) {
+                        Text("应用")
+                    }
+                }
             }
         }
     }
 
     @Composable
-    private fun SettingsActionListLayer() {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+    private fun SettingsTaskListLayer(modifier: Modifier = Modifier) {
+        SharedOverlayDialogScaffold(
+            title = "任务设置",
+            showBack = false,
+            modifier = modifier,
+            onBack = {},
+            onClose = { closeSettingsPanel() },
         ) {
-            SettingsPageHeader(
-                title = "动作列表",
-                showBack = true,
-                onBack = {
-                    settingsRoute = SettingsRoute.TaskList
-                    touchUi()
-                },
-                onClose = { closeSettingsPanel() },
-            )
+            SettingsTaskListPage()
+        }
+    }
+
+    @Composable
+    private fun SettingsActionListLayer(modifier: Modifier = Modifier) {
+        SharedOverlayDialogScaffold(
+            title = "动作列表",
+            showBack = true,
+            modifier = modifier,
+            onBack = {
+                settingsRoute = SettingsRoute.TaskList
+                touchUi()
+            },
+            onClose = { closeSettingsPanel() },
+        ) {
             SettingsActionListPage()
         }
     }
 
     @Composable
-    private fun SettingsNodeEditorLayer(nodeId: String) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+    private fun SettingsNodeEditorLayer(nodeId: String, modifier: Modifier = Modifier) {
+        SharedOverlayDialogScaffold(
+            title = "编辑动作",
+            showBack = true,
+            modifier = modifier,
+            onBack = {
+                settingsRoute = SettingsRoute.ActionList
+                touchUi()
+            },
+            onClose = { closeSettingsPanel() },
         ) {
-            SettingsPageHeader(
-                title = "编辑动作",
-                showBack = true,
-                onBack = {
-                    settingsRoute = SettingsRoute.ActionList
-                    touchUi()
-                },
-                onClose = { closeSettingsPanel() },
-            )
             SettingsNodeEditorPage(nodeId = nodeId)
         }
     }
@@ -1512,9 +1658,7 @@ class TaskControlPanelGlobalOverlay(
                     touchUi()
                 }
             },
-            onTaskCardClick = { taskId ->
-                openTaskEditorInSettings(taskId)
-            },
+            onTaskCardClick = { taskId -> openTaskEditorOverlay(taskId) },
             onRenameTask = { taskId, name ->
                 scope.launch {
                     withContext(Dispatchers.IO) {
@@ -1595,13 +1739,22 @@ class TaskControlPanelGlobalOverlay(
             Text("当前流程不存在")
             return
         }
+        val editableNodes = flow.nodes.filterNot { node ->
+            node.kind == NodeKind.START || node.kind == NodeKind.END
+        }
         Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState()),
+                .fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            flow.nodes.forEach { node ->
+            if (editableNodes.isEmpty()) {
+                Text(
+                    text = "当前流程暂无可编辑动作",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            editableNodes.forEach { node ->
                 Card(
                     onClick = {
                         store.selectNode(node.nodeId)
@@ -1653,8 +1806,7 @@ class TaskControlPanelGlobalOverlay(
         }
         Column(
             modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState()),
+                .fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Text(
@@ -1702,7 +1854,78 @@ class TaskControlPanelGlobalOverlay(
                     }
                 }
             }
-            val paramsSnapshot = node.params.toSortedMap()
+            if (node.kind == NodeKind.ACTION && node.actionType == ActionType.CLICK) {
+                val (screenWidth, screenHeight) = currentScreenSizePx()
+                val xRatio = parseDoubleParam(node.params["x"], 0.5)
+                val yRatio = parseDoubleParam(node.params["y"], 0.5)
+                val xPxCurrent = (xRatio.coerceIn(0.0, 1.0) * (screenWidth - 1)).roundToInt()
+                val yPxCurrent = (yRatio.coerceIn(0.0, 1.0) * (screenHeight - 1)).roundToInt()
+                var xPxInput by remember(node.nodeId, node.params["x"], screenWidth) {
+                    mutableStateOf(xPxCurrent.toString())
+                }
+                var yPxInput by remember(node.nodeId, node.params["y"], screenHeight) {
+                    mutableStateOf(yPxCurrent.toString())
+                }
+                Text(
+                    text = "点击坐标（像素）",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedTextField(
+                        value = xPxInput,
+                        onValueChange = { next ->
+                            xPxInput = next
+                            val parsed = next.toIntOrNull() ?: return@OutlinedTextField
+                            val clamped = parsed.coerceIn(0, (screenWidth - 1).coerceAtLeast(0))
+                            val ratio = clamped.toDouble() / (screenWidth - 1).coerceAtLeast(1).toDouble()
+                            mutateSettingsEditor("已更新参数 x") {
+                                it.updateSelectedNodeParam("x", ratio.toString())
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                        label = { Text("X(px)") },
+                        singleLine = true,
+                    )
+                    OutlinedTextField(
+                        value = yPxInput,
+                        onValueChange = { next ->
+                            yPxInput = next
+                            val parsed = next.toIntOrNull() ?: return@OutlinedTextField
+                            val clamped = parsed.coerceIn(0, (screenHeight - 1).coerceAtLeast(0))
+                            val ratio = clamped.toDouble() / (screenHeight - 1).coerceAtLeast(1).toDouble()
+                            mutateSettingsEditor("已更新参数 y") {
+                                it.updateSelectedNodeParam("y", ratio.toString())
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                        label = { Text("Y(px)") },
+                        singleLine = true,
+                    )
+                }
+                OutlinedButton(
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = {
+                        openClickPositionPicker(
+                            nodeId = node.nodeId,
+                            xRatio = xRatio,
+                            yRatio = yRatio,
+                        )
+                    },
+                ) {
+                    Text("屏幕拖动调整点击位置")
+                }
+            }
+            val paramsSnapshot = node.params
+                .filterNot { (key, _) ->
+                    node.kind == NodeKind.ACTION &&
+                        node.actionType == ActionType.CLICK &&
+                        (key == "x" || key == "y")
+                }
+                .toSortedMap()
             if (paramsSnapshot.isEmpty()) {
                 Text(
                     text = "当前节点没有参数",
@@ -1729,15 +1952,7 @@ class TaskControlPanelGlobalOverlay(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 OutlinedButton(
-                    onClick = {
-                        mutateSettingsEditor("已填充默认值") {
-                            it.fillDefaultsForSelectedNode()
-                        }
-                    },
-                ) {
-                    Text("填充默认值")
-                }
-                OutlinedButton(
+                    modifier = Modifier.fillMaxWidth(),
                     onClick = {
                         val removed = store.removeSelectedNode()
                         if (removed) {
@@ -1763,6 +1978,77 @@ class TaskControlPanelGlobalOverlay(
             NodeKind.FOLDER_REF -> "FolderRef"
             NodeKind.SUB_TASK_REF -> "SubTaskRef"
         }
+    }
+
+    private fun parseDoubleParam(value: Any?, fallback: Double): Double {
+        val parsed = when (value) {
+            is Number -> value.toDouble()
+            is String -> value.toDoubleOrNull()
+            else -> null
+        }
+        return parsed ?: fallback
+    }
+
+    private fun currentScreenSizePx(): Pair<Int, Int> {
+        val bounds = windowManager.currentWindowMetrics.bounds
+        return bounds.width().coerceAtLeast(1) to bounds.height().coerceAtLeast(1)
+    }
+
+    private fun openClickPositionPicker(nodeId: String, xRatio: Double, yRatio: Double) {
+        val (screenWidth, screenHeight) = currentScreenSizePx()
+        clickPickerNodeId = nodeId
+        setClickPickerPosition(
+            x = (xRatio.coerceIn(0.0, 1.0) * (screenWidth - 1)).toFloat(),
+            y = (yRatio.coerceIn(0.0, 1.0) * (screenHeight - 1)).toFloat(),
+        )
+        clickPickerVisible = true
+        settingsSheetVisible = false
+        statusText = "拖动圆点后点击应用"
+        touchUi()
+    }
+
+    private fun closeClickPositionPicker() {
+        clickPickerVisible = false
+        clickPickerNodeId = null
+        clickPickerX = 0f
+        clickPickerY = 0f
+        if (settingsVisible) {
+            settingsSheetVisible = true
+        }
+        touchUi()
+    }
+
+    private fun applyClickPositionPicker() {
+        val targetNodeId = clickPickerNodeId ?: run {
+            closeClickPositionPicker()
+            return
+        }
+        val (screenWidth, screenHeight) = currentScreenSizePx()
+        val xRatio = (clickPickerX / (screenWidth - 1).coerceAtLeast(1).toFloat())
+            .toDouble()
+            .coerceIn(0.0, 1.0)
+        val yRatio = (clickPickerY / (screenHeight - 1).coerceAtLeast(1).toFloat())
+            .toDouble()
+            .coerceIn(0.0, 1.0)
+        val store = settingsEditorStore
+        if (store != null) {
+            store.selectNode(targetNodeId)
+            mutateSettingsEditor("已更新点击位置") {
+                it.updateSelectedNodeParam("x", xRatio.toString())
+                it.updateSelectedNodeParam("y", yRatio.toString())
+            }
+        }
+        closeClickPositionPicker()
+    }
+
+    private fun setClickPickerPosition(x: Float, y: Float) {
+        val (screenWidth, screenHeight) = currentScreenSizePx()
+        clickPickerX = x.coerceIn(0f, (screenWidth - 1).coerceAtLeast(0).toFloat())
+        clickPickerY = y.coerceIn(0f, (screenHeight - 1).coerceAtLeast(0).toFloat())
+    }
+
+    private fun moveClickPickerByDelta(deltaX: Float, deltaY: Float) {
+        setClickPickerPosition(clickPickerX + deltaX, clickPickerY + deltaY)
     }
 
     private fun resolveCandidateTaskId(): String? {

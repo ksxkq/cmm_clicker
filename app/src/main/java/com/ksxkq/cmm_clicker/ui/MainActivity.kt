@@ -186,17 +186,20 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun openTaskOverlay(taskId: String) {
-        selectTask(taskId = taskId)
+        if (taskId.isNotBlank()) {
+            selectTask(taskId = taskId)
+        }
         val service = TaskAccessibilityService.instance
         if (service == null || !TaskAccessibilityService.isConnected) {
-            taskOperationMessage = "辅助服务未连接，无法打开全局浮窗"
+            taskOperationMessage = "辅助服务未连接，无法打开浮窗任务列表"
             return
         }
-        val opened = service.showTaskEditorOverlay(taskId)
+        val preferredTaskId = taskId.takeIf { it.isNotBlank() }
+        val opened = service.showTaskListOverlay(preferredTaskId = preferredTaskId)
         if (opened) {
-            taskOperationMessage = "全局浮窗已打开，可切到其它 App 编辑"
+            taskOperationMessage = "浮窗任务列表已打开，请在浮窗中编辑任务"
         } else {
-            taskOperationMessage = "打开全局浮窗失败"
+            taskOperationMessage = "打开浮窗任务列表失败"
         }
     }
 

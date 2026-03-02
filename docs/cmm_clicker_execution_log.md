@@ -1,6 +1,6 @@
 # cmm_clicker 执行日志（持续维护）
 
-更新时间：2026-02-27
+更新时间：2026-03-02
 
 ## 1. 当前目标
 
@@ -299,14 +299,99 @@
 230. 背景层回收时机再收敛：新增 `pendingSettingsOverlayRemoval`，只在“全部内容不可见 + scrim alpha 衰减到接近 0”后才执行 `removeSettingsOverlayIfIdle`，避免 scrim 尚未淡完即 `removeView` 导致的突兀闪断。
 231. 清理与打开路径同步：在打开设置页/确认弹窗时显式清空 pending 移除标记，防止关闭动画被取消后出现误回收。
 232. 稳定性验证：以上背景层统一与回收时序优化后再次通过 `testDebugUnitTest` 与 `assembleDebug`。
+233. 录制保存弹窗新增“步骤编辑”能力：在保存前展示本次录制步骤清单，支持单步 `上移/下移/删除`，允许先整理顺序再落库。
+234. 录制会话收敛：当保存弹窗内步骤被删到 0 条时，自动关闭保存弹窗并回到普通面板，同时重置录制会话状态，避免空录制任务被保存。
+235. 稳定性验证：以上“录制步骤可编辑”改造后再次通过 `testDebugUnitTest` 与 `assembleDebug`。
+236. 按产品要求回退“保存弹窗内动作编辑”：移除录制保存弹窗中的步骤列表与 `上移/下移/删除` 控件，恢复为仅做“命名 + 保存/丢弃”的确认弹窗。
+237. 编辑职责收敛：动作修改入口统一保留在任务编辑页（动作列表/动作详情），录制保存阶段不再承担动作编辑。
+238. 稳定性验证：以上回退后再次通过 `testDebugUnitTest` 与 `assembleDebug`。
+239. 动作列表语义收敛：任务编辑页列表不再展示 `START/END` 控制节点，避免将流程控制节点误解为可编辑动作；当前只展示可编辑节点集合。
+240. 稳定性验证：以上动作列表过滤后再次通过 `testDebugUnitTest` 与 `assembleDebug`。
+241. `CLICK` 编辑交互升级：节点详情新增“屏幕拖动选点”模式（全屏拾点层 + 可拖动圆点 + 应用/取消），支持在真实屏幕背景上直接选取点击坐标。
+242. `CLICK` 手动输入语义收敛为像素坐标：详情页新增 `X(px)/Y(px)` 输入并实时回写；`x/y` 百分比字段从通用参数区隐藏，避免用户在编辑层看到比例值。
+243. 参数存储兼容保持：编辑层使用像素坐标交互，落库前统一转换为运行时比例值（`0~1`）写入节点参数，不影响现有执行器协议。
+244. 稳定性验证：以上 `CLICK` 可视化拾点与像素输入改造后再次通过 `testDebugUnitTest` 与 `assembleDebug`。
+245. `CLICK` 拾点交互补齐：拾点层支持“任意区域滑动/点击”更新准星位置，不再要求用户必须按住准星拖拽。
+246. 拾点准星样式优化：由实心圆改为空心十字准星（中心点 + 十字线 + 环形边框），降低对底层目标内容的遮挡。
+247. 边界行为保持：准星中心点仍限制在屏幕范围内，准星图形允许部分超出屏幕边缘，兼顾边缘点位可达与视觉可读性。
+248. 稳定性验证：以上拾点交互细化后再次通过 `testDebugUnitTest` 与 `assembleDebug`。
+249. 拾点提示文案增强：顶部文案明确补充“任意位置滑动/点击也可移动准星”，避免用户误以为只能拖准星本体。
+250. 拾点底部操作区可读性修复：`取消/应用` 按钮容器改为实体卡片背景（非透明），在复杂底图上保持稳定对比度。
+251. 稳定性验证：以上提示与可读性优化后再次通过 `testDebugUnitTest` 与 `assembleDebug`。
+252. 按产品要求收敛拾点手势：移除“点击任意位置跳点”，保留“任意位置滑动 + 拖动准星本体”两种移动方式，避免误触导致点位瞬时跳变。
+253. 提示文案同步收敛：拾点标题与说明均改为“任意位置滑动可移动准星”，与实际行为一致。
+254. 稳定性验证：以上拾点手势收敛后再次通过 `testDebugUnitTest` 与 `assembleDebug`。
+255. `CLICK` 拾点入口可见性增强：节点详情中的入口按钮改为整行宽度，并将文案调整为“屏幕拖动调整点击位置”，降低入口被忽略概率。
+256. 按产品要求移除“填充默认值”：浮窗节点编辑页仅保留“删除动作”，不再提供默认值一键填充按钮。
+257. 稳定性验证：以上入口与操作区精简后再次通过 `testDebugUnitTest` 与 `assembleDebug`。
+258. 编辑入口统一：操作面板“任务设置”中的任务卡片点击不再走面板内嵌编辑路由，改为关闭设置页后直接打开全局任务编辑浮窗（`TaskEditorGlobalOverlay`），与首页任务编辑入口保持一致。
+259. 入口统一后可见性修复：面板入口与首页入口现在复用同一编辑器能力集，`CLICK` 的“屏幕拖动调整点击位置”入口在两侧路径表现一致。
+260. 稳定性验证：以上入口统一改造后再次通过 `testDebugUnitTest` 与 `assembleDebug`。
+261. 修复“入口统一后 `CLICK` 拾点能力缺失”：全局任务编辑浮窗（`TaskEditorGlobalOverlay`）补齐 `CLICK` 的像素坐标编辑（`X(px)/Y(px)`）与“屏幕拖动调整点击位置”全屏拾点层。
+262. 全局编辑器参数展示收敛：`CLICK` 节点在参数区隐藏比例值 `x/y`，避免与像素输入双语义并存；拾点结果仍按比例值存储，兼容运行时协议。
+263. 统一交互细节：全局编辑浮窗节点页移除“填充默认值”按钮，和近期操作面板编辑体验保持一致。
+264. 稳定性验证：以上全局编辑器补齐改造后再次通过 `testDebugUnitTest` 与 `assembleDebug`。
+265. 修复“任务设置 -> 编辑任务”过渡断层：切换编辑时改为先请求打开全局任务编辑浮窗，再在检测到编辑浮窗已显示后关闭设置浮窗，避免“设置页先消失，再出现编辑页”的空窗感。
+266. 服务能力补齐：`TaskAccessibilityService` 新增 `isTaskEditorOverlayShowing()`，供操作面板切换链路判断编辑浮窗是否已挂载。
+267. 稳定性验证：以上过渡修复后再次通过 `testDebugUnitTest` 与 `assembleDebug`。
+268. 按产品反馈将“切换式过渡”改为“真实堆叠”：从操作面板任务设置进入编辑时不再关闭设置浮窗，直接在其上层打开全局任务编辑浮窗；关闭编辑后可回到原任务设置层。
+269. 文档与实现收敛：撤销 `isTaskEditorOverlayShowing()` 检测链路，避免“先开再关”逻辑继续导致下层消失。
+270. 稳定性验证：以上堆叠语义修正后再次通过 `testDebugUnitTest` 与 `assembleDebug`。
+271. 堆叠可见性增强：全局编辑浮窗新增“来自任务设置”的堆叠模式（更轻 scrim + 顶部 inset 露出），避免上层完全遮住下层导致“看不到堆叠”。
+272. 风格一致性修复：统一“任务设置/编辑任务”主弹窗圆角到同一规格（18dp），消除两套弹窗圆角不一致。
+273. 稳定性验证：以上堆叠视觉与样式统一后再次通过 `testDebugUnitTest` 与 `assembleDebug`。
+274. 任务设置三层页面改为复用共享对话框壳：新增 `OverlayDialogScaffoldShared` 组件（标题区/面包屑/头尾 actions/圆角边框样式），`TaskControlPanel` 的 `任务设置/动作列表/编辑动作` 三层统一接入，移除面板侧自定义 `SettingsPageHeader`。
+275. 堆叠结构收敛：设置页堆叠层不再各自包一层手写 `Card`，改为“动画容器 + 共享 Scaffold”组合，和编辑浮窗的卡片语义保持一致。
+276. 稳定性验证：以上共享组件复用改造后再次通过 `testDebugUnitTest` 与 `assembleDebug`。
+277. 修复“能堆叠但无堆叠动画”：新增跨窗口联动状态（`settingsExternalStacked`），当编辑浮窗在任务设置上层打开时，下层任务设置页同步执行退后动画（缩放 + 轻微位移）；编辑浮窗关闭后下层自动回弹。
+278. 跨窗口状态检测恢复：`TaskAccessibilityService` 重新提供 `isTaskEditorOverlayShowing()`，操作面板通过轮询观察编辑浮窗显示态并驱动下层动画状态收敛。
+279. 稳定性验证：以上跨窗口堆叠动画联动后再次通过 `testDebugUnitTest` 与 `assembleDebug`。
+280. 参数一致性修复（跨窗口 vs 同窗堆叠）：移除跨窗口临时动画参数（独立 scrim/额外位移），改为直接复用 `OverlayStackMotion` 同套参数与 spring 进退场曲线，保证首层堆叠与后续层级动画节奏一致。
+281. 跨窗口联动采样频率优化：编辑浮窗显示态监听轮询从 `120ms` 收敛到 `32ms`，减少“下层退后动画滞后一拍”的体感。
+282. 稳定性验证：以上参数统一与监听时序优化后再次通过 `testDebugUnitTest` 与 `assembleDebug`。
+283. 恢复“全局最多两层可见”规则：跨窗口堆叠场景下新增编辑浮窗路由深度检测；当编辑浮窗进入二级页面（如动作详情）时，下层任务设置 sheet 自动隐藏，避免总可见层数达到 3 层。
+284. 下层动画触发条件收敛：仅在“编辑浮窗处于一级页”时启用 `settingsExternalStacked` 的退后动画，进入二级页后不再对任务设置层施加退后态。
+285. 稳定性验证：以上“最多两层可见”修复后再次通过 `testDebugUnitTest` 与 `assembleDebug`。
+286. 修复“二级页切换瞬间仍可见 3 层”问题：当外部编辑浮窗从一级进入二级时，任务设置层退场改为即时移除（`snap` 退场），不再保留退出过渡帧，保证任意时刻最多两层可见。
+287. 首层视觉参数再统一：任务设置 sheet 的 scrim 透明度改为复用 `OverlayStackMotion.SHEET_SCRIM_ALPHA`，与后续编辑层保持同一套堆叠基线；高遮罩仅保留给中心确认类对话框。
+288. 稳定性验证：以上“即时两层约束 + scrim 参数统一”修复后再次通过 `testDebugUnitTest` 与 `assembleDebug`。
+289. 修复跨窗口联动监听竞态：`watchExternalEditorStackState` 不再在编辑浮窗尚未真正挂载时提前退出，改为先等待编辑浮窗出现（最多 2s）后再进入稳定监听。
+290. 打开编辑入口状态收敛：移除“打开即强制设置 `settingsExternalStacked=true`”的提前置位，改为由真实编辑浮窗显示态驱动下层堆叠/隐藏，避免“下层像固定在底部但不随详情联动”。
+291. 稳定性验证：以上跨窗口监听竞态修复后再次通过 `testDebugUnitTest` 与 `assembleDebug`。
+292. 详情页前景位替换修复：移除全局编辑浮窗中 `FlowManager/NodeEditor` 的额外顶部偏移（`padding(top=20.dp)`），使新进入页面占用当前前景位，符合“当前页退后、新页接管其位置”的堆叠语义。
+293. 稳定性验证：以上前景位替换修复后再次通过 `testDebugUnitTest` 与 `assembleDebug`。
+294. 堆叠遮挡修复（面板来源路径）：进入 `动作详情/流程管理` 时，下层“编辑任务”页新增向上退让位移（`-FOREGROUND_LAYER_TOP_INSET_DP`）并保留缩放，避免被上层整页完全遮挡。
+295. 语义保持：上层详情页继续占据原前景位，下层退到背景位，满足“新页接管当前位置、旧页后退可见”的堆叠预期。
+296. 稳定性验证：以上遮挡修复后再次通过 `testDebugUnitTest` 与 `assembleDebug`。
+297. 首层堆叠语义对齐：面板来源的“任务设置 -> 编辑任务”阶段，下层 `任务设置` 由“仅缩放”改为“缩放 + 向上退让到背景位”（`-FOREGROUND_LAYER_TOP_INSET_DP`），与后续层级转场规则一致。
+298. 目标收敛：保证跨窗口首层与同窗口后续层级都遵循“新页占前景位、旧页退到背景位”的统一动画语义。
+299. 稳定性验证：以上首层语义对齐修复后再次通过 `testDebugUnitTest` 与 `assembleDebug`。
+300. 面板路径切回同窗口编辑：`任务设置` 中任务卡片点击不再 `addView` 打开 `TaskEditorGlobalOverlay`，改为在当前 settings overlay 内加载 `TaskGraphEditorStore` 并进入 `SettingsRoute.ActionList`。
+301. 跨窗口链路收敛：面板进入编辑前会主动关闭可能残留的全局编辑浮窗，避免同任务出现双编辑窗口；后续堆叠动画完全由 settings overlay 单窗口路由驱动。
+302. 稳定性验证：以上“同窗口编辑入口恢复”改造后再次通过 `testDebugUnitTest` 与 `assembleDebug`。
+303. 修复同窗口编辑崩溃：`SettingsActionListPage` 与 `SettingsNodeEditorPage` 移除内层 `verticalScroll`，避免与 `SharedOverlayDialogScaffold` 内容区外层滚动叠加导致 “scrollable measured with infinity max height constraints” 异常。
+304. 约束策略收敛：settings overlay 内统一由共享 scaffold 承担纵向滚动，子页面仅输出普通内容布局（`Column` 不再声明独立滚动容器）。
+305. 稳定性验证：以上滚动约束修复后再次通过 `testDebugUnitTest` 与 `assembleDebug`。
+306. 首页编辑入口收敛：任务页卡片点击不再调用 `showTaskEditorOverlay` 直开全局编辑器，改为调用 `showTaskListOverlay` 打开“浮窗任务列表（任务设置页）”。
+307. 控制面板新增能力：`TaskControlPanelGlobalOverlay` 增加 `showSettingsPanel(preferredTaskId)`，支持从首页直接打开任务设置浮窗并携带预选任务；`TaskAccessibilityService` 对外新增 `showTaskListOverlay(...)`。
+308. 入口语义统一：首页仅保留“进入浮窗任务列表再编辑”路径，浮窗面板与首页的编辑链路收敛到同一套 settings overlay。
+309. 稳定性验证：以上首页入口收敛改造后再次通过 `testDebugUnitTest` 与 `assembleDebug`。
+310. 编辑架构进一步收敛：删除 `TaskEditorGlobalOverlay` 与 `TaskAccessibilityService` 中对应的 show/hide/query 接口，移除跨窗口编辑能力。
+311. 状态与动画链路清理：`TaskControlPanelGlobalOverlay` 中 `settingsExternalStacked/settingsExternalDetailVisible/watchExternalEditorStackState` 等跨窗口联动状态与分支全部移除，设置页仅保留同窗口堆叠动画。
+312. 结果一致性：编辑入口统一为“首页/面板 -> 浮窗任务列表 -> 动作列表/动作详情”，运行时仅存在一套编辑 UI 承载。
+313. 稳定性验证：以上“删除全局编辑浮窗 + 清理跨窗口联动”改造后再次通过 `testDebugUnitTest` 与 `assembleDebug`。
+314. 首页任务页职责收敛：`TaskTabScreen` 改为仅保留一个“任务列表”入口卡片，不再在首页内联展示任务 CRUD、搜索、筛选与运行卡片。
+315. 入口行为统一：首页“打开任务列表”按钮直接调用 `showTaskListOverlay`，与浮窗面板入口一致，任务创建/编辑/运行统一在浮窗任务列表链路内完成。
+316. 稳定性验证：以上首页入口精简改造后再次通过 `testDebugUnitTest` 与 `assembleDebug`。
 
 ## 3. 正在进行
 
 1. 全局操作面板实机交互打磨（录制态按钮间距/状态文案/误触控制、开始执行确认链路与动效、录制提示层反馈）。
 2. 把“运行 trace 与错误码”沉淀为可导出日志结构，为调试面板打基础。
 3. 继续推进页面状态层拆分：`MainActivity` -> `ViewModel + Route state`，让任务/控制台各自拥有独立状态模型。
-4. 浮窗编辑器与操作面板的导航协同（后续支持从操作面板直接进入当前任务编辑态）。
+4. 编辑页组件化：从 `TaskControlPanelGlobalOverlay` 提取共享 `ActionList/NodeEditor` 组件，降低页面文件体积与耦合。
 5. 录制多指会话实机打磨（手指数上限、停顿阈值、不同机型采样密度）。
+6. 首页任务入口已收敛为单按钮，后续观察是否需要在首页增加“最近任务摘要”只读信息（不引入第二条编辑路径）。
 
 ## 4. 下一步计划
 
@@ -316,7 +401,7 @@
 4. 流程图交互增强：预览布局持久化（当前为会话内）与连线信息密度优化。
 5. 导入/迁移链在任务体验稳定后接入（`LegacyIR -> migrateToLatest`）。
 6. UI 架构继续分层：引入 `RouteState`/`UIIntent`，减少 Activity 中业务判断。
-7. 录制动作编辑二期：单步删除/重排、多指 stroke 可视化编辑。
+7. 录制动作编辑二期：多指 stroke 可视化编辑与参数微调（统一在任务编辑页承载）。
 
 ## 5. 风险与注意事项
 
@@ -327,3 +412,4 @@
 5. 多指录制单次手势受 `AccessibilityService` stroke 数量限制（当前安全上限为 18 条），极端场景会进行裁剪。
 6. 多指 timed 分段回放在高采样密度下会增加分发次数（按时间边界切片）；若后续出现低端机卡顿，需要继续做时间片合并策略。
 7. 错峰多指当前走“单次 multi-stroke”回放路径以优先保证不取消；后续若需进一步提升错峰长按精度，可再做“预注册占位指针”或“分阶段手势重建”专项优化。
+8. 目前编辑链路集中在 `TaskControlPanelGlobalOverlay` 单文件内，后续重构需确保录制控制与任务编辑状态拆分后仍保持单向数据流，避免状态互相污染。

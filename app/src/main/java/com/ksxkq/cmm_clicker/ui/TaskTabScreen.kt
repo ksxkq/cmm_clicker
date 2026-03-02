@@ -45,27 +45,25 @@ private enum class TaskLibrarySegment(val label: String) {
 
 @Composable
 fun TaskTabScreen(
-    tasks: List<TaskRecord>,
-    running: Boolean,
     taskOperationMessage: String,
-    onCreateTask: (String) -> Unit,
-    onOpenTaskOverlay: (String) -> Unit,
-    onRenameTask: (String, String) -> Unit,
-    onDuplicateTask: (String) -> Unit,
-    onDeleteTask: (String) -> Unit,
-    onRunTask: (String) -> Unit,
+    onOpenTaskOverlay: () -> Unit,
 ) {
-    TaskLibraryPanel(
-        tasks = tasks,
-        running = running,
-        taskOperationMessage = taskOperationMessage,
-        onCreateTask = onCreateTask,
-        onTaskCardClick = onOpenTaskOverlay,
-        onRenameTask = onRenameTask,
-        onDuplicateTask = onDuplicateTask,
-        onDeleteTask = onDeleteTask,
-        onRunTask = onRunTask,
-    )
+    SectionCard(
+        title = "任务列表",
+        subtitle = "首页仅保留任务列表入口；新建、编辑、运行请在浮窗任务列表中完成",
+    ) {
+        ActionButton(
+            text = "打开任务列表",
+            onClick = onOpenTaskOverlay,
+        )
+        if (taskOperationMessage.isNotBlank()) {
+            Text(
+                text = taskOperationMessage,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
 }
 
 @Composable

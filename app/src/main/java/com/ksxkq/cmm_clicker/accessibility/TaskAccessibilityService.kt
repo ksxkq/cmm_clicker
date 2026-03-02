@@ -61,10 +61,6 @@ class TaskAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
         instance = this
         gestureFeedbackOverlay = GestureFeedbackOverlay(this)
-        taskEditorGlobalOverlay = TaskEditorGlobalOverlay(
-            context = this,
-            scope = serviceScope,
-        )
         taskControlPanelGlobalOverlay = TaskControlPanelGlobalOverlay(
             context = this,
             scope = serviceScope,
@@ -86,8 +82,6 @@ class TaskAccessibilityService : AccessibilityService() {
     }
 
     override fun onDestroy() {
-        taskEditorGlobalOverlay?.hide(animate = false)
-        taskEditorGlobalOverlay = null
         taskControlPanelGlobalOverlay?.hide()
         taskControlPanelGlobalOverlay = null
         gestureFeedbackOverlay?.dispose()
@@ -102,7 +96,6 @@ class TaskAccessibilityService : AccessibilityService() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var gestureFeedbackOverlay: GestureFeedbackOverlay? = null
-    private var taskEditorGlobalOverlay: TaskEditorGlobalOverlay? = null
     private var taskControlPanelGlobalOverlay: TaskControlPanelGlobalOverlay? = null
 
     fun showClickFeedback(x: Float, y: Float, durationMs: Long) {
@@ -155,19 +148,15 @@ class TaskAccessibilityService : AccessibilityService() {
         )
     }
 
-    fun showTaskEditorOverlay(taskId: String): Boolean {
-        val overlay = taskEditorGlobalOverlay ?: return false
-        overlay.show(taskId)
-        return true
-    }
-
-    fun hideTaskEditorOverlay() {
-        taskEditorGlobalOverlay?.hide()
-    }
-
     fun showTaskControlPanelOverlay(): Boolean {
         val overlay = taskControlPanelGlobalOverlay ?: return false
         overlay.show()
+        return true
+    }
+
+    fun showTaskListOverlay(preferredTaskId: String? = null): Boolean {
+        val overlay = taskControlPanelGlobalOverlay ?: return false
+        overlay.showSettingsPanel(preferredTaskId = preferredTaskId)
         return true
     }
 

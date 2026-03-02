@@ -1,6 +1,6 @@
 # UI 主题系统说明（黑白极简）
 
-更新时间：2026-02-27
+更新时间：2026-03-02
 
 ## 1. 设计目标
 
@@ -15,7 +15,7 @@
 3. `app/src/main/java/com/ksxkq/cmm_clicker/ui/theme/CmmClickerTheme.kt`
 4. `app/src/main/java/com/ksxkq/cmm_clicker/ui/theme/ThemePreferenceStore.kt`
 5. `app/src/main/java/com/ksxkq/cmm_clicker/ui/MainActivity.kt`
-6. `app/src/main/java/com/ksxkq/cmm_clicker/accessibility/TaskEditorGlobalOverlay.kt`
+6. `app/src/main/java/com/ksxkq/cmm_clicker/accessibility/TaskControlPanelGlobalOverlay.kt`
 7. `app/src/main/java/com/ksxkq/cmm_clicker/ui/MainUiComponents.kt`
 8. `app/src/main/res/values/themes.xml`
 
@@ -32,7 +32,7 @@
 
 1. `ColorScheme`：背景、文本、边框、容器色。
 2. `CmmClickerTheme` 将 `AppThemeTokens` 映射到 Compose `MaterialTheme`。
-3. 浮窗 `TaskEditorGlobalOverlay` 也走 Compose 渲染，并与首页复用同一 `CmmClickerTheme`。
+3. 浮窗任务列表与编辑页（`TaskControlPanelGlobalOverlay`）走 Compose 渲染，并与首页复用同一 `CmmClickerTheme`。
 4. `Typography`：标题、正文、辅助文本。
 5. `Shapes`：统一圆角规范。
 

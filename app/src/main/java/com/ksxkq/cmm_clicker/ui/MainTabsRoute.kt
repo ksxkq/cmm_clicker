@@ -122,15 +122,8 @@ fun MainTabsRoute(
 
             when (tab) {
                 MainTab.TASKS -> TaskTabScreen(
-                    tasks = tasks,
-                    running = running,
                     taskOperationMessage = taskOperationMessage,
-                    onCreateTask = onCreateTask,
-                    onOpenTaskOverlay = onOpenTaskOverlay,
-                    onRenameTask = onRenameTask,
-                    onDuplicateTask = onDuplicateTask,
-                    onDeleteTask = onDeleteTask,
-                    onRunTask = onRunTask,
+                    onOpenTaskOverlay = { onOpenTaskOverlay("") },
                 )
 
                 MainTab.CONSOLE -> ConsoleTabScreen(

@@ -128,6 +128,16 @@ object EditorParamSchemaRegistry {
                     maxValue = 10000.0,
                     helperText = "点击时长(毫秒)",
                 ),
+                ParamFieldDefinition(
+                    key = "postDelayMs",
+                    label = "postDelayMs",
+                    inputType = ParamFieldInputType.NUMBER,
+                    required = true,
+                    defaultValue = "0",
+                    minValue = 0.0,
+                    maxValue = 600000.0,
+                    helperText = "执行后延迟(毫秒)",
+                ),
             )
 
             ActionType.DUP_CLICK -> listOf(
@@ -177,6 +187,16 @@ object EditorParamSchemaRegistry {
                     defaultValue = "80",
                     minValue = 0.0,
                     maxValue = 5000.0,
+                ),
+                ParamFieldDefinition(
+                    key = "postDelayMs",
+                    label = "postDelayMs",
+                    inputType = ParamFieldInputType.NUMBER,
+                    required = true,
+                    defaultValue = "0",
+                    minValue = 0.0,
+                    maxValue = 600000.0,
+                    helperText = "执行后延迟(毫秒)",
                 ),
             )
 
@@ -230,6 +250,16 @@ object EditorParamSchemaRegistry {
                     minValue = 1.0,
                     maxValue = 10000.0,
                 ),
+                ParamFieldDefinition(
+                    key = "postDelayMs",
+                    label = "postDelayMs",
+                    inputType = ParamFieldInputType.NUMBER,
+                    required = true,
+                    defaultValue = "0",
+                    minValue = 0.0,
+                    maxValue = 600000.0,
+                    helperText = "执行后延迟(毫秒)",
+                ),
             )
 
             ActionType.RECORD -> listOf(
@@ -241,6 +271,16 @@ object EditorParamSchemaRegistry {
                     defaultValue = "400",
                     minValue = 1.0,
                     maxValue = 600000.0,
+                ),
+                ParamFieldDefinition(
+                    key = "postDelayMs",
+                    label = "postDelayMs",
+                    inputType = ParamFieldInputType.NUMBER,
+                    required = true,
+                    defaultValue = "0",
+                    minValue = 0.0,
+                    maxValue = 600000.0,
+                    helperText = "执行后延迟(毫秒)",
                 ),
             )
 

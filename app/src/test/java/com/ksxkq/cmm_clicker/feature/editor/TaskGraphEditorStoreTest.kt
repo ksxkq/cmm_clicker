@@ -156,4 +156,40 @@ class TaskGraphEditorStoreTest {
         assertTrue(deleted is TaskGraphEditorStore.DeleteSelectedFlowResult.Success)
         assertTrue(store.state().bundle.findFlow(tempFlowId) == null)
     }
+
+    @Test
+    fun duplicateNode_shouldInsertCopyAfterSource() {
+        val store = TaskGraphEditorStore(
+            initialBundle = SampleFlowBundleFactory.createSimpleDemoBundle(),
+        )
+        store.selectFlow("main")
+        val before = store.state().selectedFlow!!.nodes
+        val sourceIndex = before.indexOfFirst { it.nodeId == "click" }
+        assertTrue(sourceIndex >= 0)
+
+        val duplicatedId = store.duplicateNode("click")
+        assertNotNull(duplicatedId)
+
+        val after = store.state().selectedFlow!!.nodes
+        val duplicatedIndex = after.indexOfFirst { it.nodeId == duplicatedId }
+        assertEquals(sourceIndex + 1, duplicatedIndex)
+        val duplicatedNode = after[duplicatedIndex]
+        assertEquals(ActionType.CLICK, duplicatedNode.actionType)
+        assertEquals(after[duplicatedIndex - 1].params["x"], duplicatedNode.params["x"])
+    }
+
+    @Test
+    fun updateNodeEnabledAndRemoveNode_shouldWorkByNodeId() {
+        val store = TaskGraphEditorStore(
+            initialBundle = SampleFlowBundleFactory.createSimpleDemoBundle(),
+        )
+        store.selectFlow("main")
+
+        assertTrue(store.updateNodeEnabled(nodeId = "click", enabled = false))
+        val disabledNode = store.state().selectedFlow!!.findNode("click")
+        assertEquals(false, disabledNode!!.flags.enabled)
+
+        assertTrue(store.removeNode("click"))
+        assertTrue(store.state().selectedFlow!!.findNode("click") == null)
+    }
 }

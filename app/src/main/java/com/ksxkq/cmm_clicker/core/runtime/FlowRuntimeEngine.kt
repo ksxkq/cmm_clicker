@@ -16,6 +16,7 @@ import com.ksxkq.cmm_clicker.core.model.TaskBundle
 import com.ksxkq.cmm_clicker.core.model.TaskFlow
 import com.ksxkq.cmm_clicker.core.model.ValidationSeverity
 import java.util.UUID
+import kotlinx.coroutines.delay
 
 class FlowRuntimeEngine(
     private val pluginRegistry: ActionPluginRegistry = BuiltinPluginFactory.createDefaultRegistry(),
@@ -202,6 +203,13 @@ class FlowRuntimeEngine(
                 }
 
                 NodeOutcomeStatus.CONTINUE -> {
+                    val postDelayMs = readAnyLong(
+                        value = node.params["postDelayMs"],
+                        fallback = 0L,
+                    ).coerceAtLeast(0L)
+                    if (postDelayMs > 0L && !runtimeContext.dryRun) {
+                        delay(postDelayMs)
+                    }
                     traceCollector.add(
                         RuntimeTraceEvent(
                             traceId = traceId,
@@ -210,7 +218,12 @@ class FlowRuntimeEngine(
                             nodeId = node.nodeId,
                             nodeKind = node.kind,
                             phase = RuntimeTracePhase.NODE_END,
-                            message = outcome.message,
+                            message = if (postDelayMs > 0L) {
+                                val baseMessage = outcome.message?.takeIf { it.isNotBlank() } ?: "ok"
+                                "$baseMessage | postDelayMs=$postDelayMs"
+                            } else {
+                                outcome.message
+                            },
                         ),
                     )
                     pointer = outcome.next
@@ -331,6 +344,15 @@ class FlowRuntimeEngine(
                 message = actionResult.message ?: "action_stopped",
             )
         }
+    }
+
+    private fun readAnyLong(value: Any?, fallback: Long): Long {
+        val parsed = when (value) {
+            is Number -> value.toLong()
+            is String -> value.toLongOrNull()
+            else -> null
+        }
+        return parsed ?: fallback
     }
 
     private fun evalBranch(node: FlowNode, runtimeContext: RuntimeContext): Boolean {

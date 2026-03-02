@@ -27,10 +27,12 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.Canvas as ComposeCanvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -50,11 +52,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.FiberManualRecord
+import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -69,18 +73,29 @@ import androidx.compose.runtime.Recomposer
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Path as ComposePath
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.AndroidUiDispatcher
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.core.view.ViewCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
@@ -100,11 +115,15 @@ import com.ksxkq.cmm_clicker.core.model.FlowEdge
 import com.ksxkq.cmm_clicker.core.model.FlowNode
 import com.ksxkq.cmm_clicker.core.model.NodeKind
 import com.ksxkq.cmm_clicker.core.model.TaskBundle
+import com.ksxkq.cmm_clicker.core.model.TaskFlow
 import com.ksxkq.cmm_clicker.core.runtime.FlowRuntimeEngine
 import com.ksxkq.cmm_clicker.core.runtime.RuntimeEngineOptions
+import com.ksxkq.cmm_clicker.feature.editor.TaskGraphEditorState
 import com.ksxkq.cmm_clicker.feature.editor.TaskGraphEditorStore
 import com.ksxkq.cmm_clicker.feature.task.LocalFileTaskRepository
 import com.ksxkq.cmm_clicker.feature.task.TaskRecord
+import com.ksxkq.cmm_clicker.ui.AppDropdownMenu
+import com.ksxkq.cmm_clicker.ui.AppDropdownMenuItem
 import com.ksxkq.cmm_clicker.ui.CircleActionIconButton
 import com.ksxkq.cmm_clicker.ui.TaskLibraryPanel
 import com.ksxkq.cmm_clicker.ui.theme.AppThemeMode
@@ -116,8 +135,10 @@ import java.util.Locale
 import java.util.UUID
 import kotlin.math.hypot
 import kotlin.math.roundToInt
+import kotlin.math.sqrt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -140,6 +161,7 @@ class TaskControlPanelGlobalOverlay(
         private const val AUX_OVERLAY_SCRIM_ALPHA = 0.5f
         private const val AUX_OVERLAY_SCRIM_FADE_MS = 220
         private const val CLICK_PICKER_SCRIM_ALPHA = 0.08f
+        private const val ACTION_LIST_MAX_VISIBLE_JUMP_LANES = 3
     }
 
     private data class RecordedStroke(
@@ -197,6 +219,7 @@ class TaskControlPanelGlobalOverlay(
     private var settingsRecomposerJob: Job? = null
     private var themeSyncJob: Job? = null
     private var recordingTickerJob: Job? = null
+    private var runTaskJob: Job? = null
 
     private var captureView: View? = null
     private var captureTrailView: RecordingTrailOverlayView? = null
@@ -1011,18 +1034,22 @@ class TaskControlPanelGlobalOverlay(
                                 },
                             )
                             CircleActionIconButton(
-                                enabled = !running && !settingsVisible,
+                                enabled = !settingsVisible,
                                 filled = true,
                                 onClick = {
                                     if (panelDismissAnimating || settingsVisible) {
                                         return@CircleActionIconButton
                                     }
-                                    promptStartLastTaskConfirmation()
+                                    if (running) {
+                                        stopRunningTask()
+                                    } else {
+                                        promptStartLastTaskConfirmation()
+                                    }
                                 },
                                 icon = { tint ->
                                     Icon(
-                                        imageVector = Icons.Rounded.PlayArrow,
-                                        contentDescription = if (running) "运行中" else "开始",
+                                        imageVector = if (running) Icons.Rounded.Stop else Icons.Rounded.PlayArrow,
+                                        contentDescription = if (running) "停止执行" else "开始",
                                         tint = tint,
                                         modifier = Modifier.size(18.dp),
                                     )
@@ -1712,21 +1739,82 @@ class TaskControlPanelGlobalOverlay(
             return
         }
         val state = store.state()
+        var addActionMenuExpanded by remember(task.taskId, state.selectedFlowId) { mutableStateOf(false) }
+        var previewVisible by remember(task.taskId, state.selectedFlowId) { mutableStateOf(false) }
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            OutlinedButton(
-                onClick = {
-                    mutateSettingsEditor("已添加动作") { it.addActionNode() }
-                },
-            ) {
-                Text("添加动作")
+            Box {
+                OutlinedButton(
+                    onClick = { addActionMenuExpanded = true },
+                ) {
+                    Text("添加动作")
+                }
+                AppDropdownMenu(
+                    expanded = addActionMenuExpanded,
+                    onDismissRequest = { addActionMenuExpanded = false },
+                ) {
+                    AppDropdownMenuItem(
+                        text = "添加点击动作",
+                        onClick = {
+                            addActionMenuExpanded = false
+                            mutateSettingsEditor("已添加点击动作") {
+                                it.addActionNode()
+                            }
+                        },
+                    )
+                    AppDropdownMenuItem(
+                        text = "添加滑动动作",
+                        onClick = {
+                            addActionMenuExpanded = false
+                            mutateSettingsEditor("已添加滑动动作") {
+                                it.addActionNode()
+                                it.updateSelectedNodeActionType(ActionType.SWIPE)
+                            }
+                        },
+                    )
+                    AppDropdownMenuItem(
+                        text = "添加录制动作",
+                        onClick = {
+                            addActionMenuExpanded = false
+                            mutateSettingsEditor("已添加录制动作") {
+                                it.addActionNode()
+                                it.updateSelectedNodeActionType(ActionType.RECORD)
+                            }
+                        },
+                    )
+                    AppDropdownMenuItem(
+                        text = "添加双击动作",
+                        onClick = {
+                            addActionMenuExpanded = false
+                            mutateSettingsEditor("已添加双击动作") {
+                                it.addActionNode()
+                                it.updateSelectedNodeActionType(ActionType.DUP_CLICK)
+                            }
+                        },
+                    )
+                    AppDropdownMenuItem(
+                        text = "添加跳转动作",
+                        onClick = {
+                            addActionMenuExpanded = false
+                            mutateSettingsEditor("已添加跳转动作") {
+                                it.addActionNode()
+                                it.updateSelectedNodeKind(NodeKind.JUMP)
+                            }
+                        },
+                    )
+                }
             }
             OutlinedButton(
                 onClick = { persistSettingsEditor("已保存任务") },
             ) {
                 Text("保存")
+            }
+            OutlinedButton(
+                onClick = { previewVisible = !previewVisible },
+            ) {
+                Text(if (previewVisible) "隐藏预览" else "流程预览")
             }
         }
         Text(
@@ -1742,50 +1830,924 @@ class TaskControlPanelGlobalOverlay(
         val editableNodes = flow.nodes.filterNot { node ->
             node.kind == NodeKind.START || node.kind == NodeKind.END
         }
+        var actionMenuNodeId by remember(task.taskId, state.selectedFlowId) { mutableStateOf<String?>(null) }
+        var pendingDeleteNodeId by remember(task.taskId, state.selectedFlowId) { mutableStateOf<String?>(null) }
+        val pendingDeleteNode = editableNodes.firstOrNull { it.nodeId == pendingDeleteNodeId }
+        val openNodeEditor: (String, String) -> Unit = { flowId, nodeId ->
+            store.selectFlow(flowId)
+            store.selectNode(nodeId)
+            settingsRoute = SettingsRoute.NodeEditor(nodeId)
+            touchUi()
+        }
+        val rowAnchors = remember(task.taskId, state.selectedFlowId) { mutableStateMapOf<String, RowAnchor>() }
+        LaunchedEffect(editableNodes.map { it.nodeId }) {
+            val validIds = editableNodes.map { it.nodeId }.toSet()
+            rowAnchors.keys.toList().forEach { key ->
+                if (key !in validIds) {
+                    rowAnchors.remove(key)
+                }
+            }
+        }
+        val jumpLayout = remember(flow, editableNodes) {
+            buildJumpConnectionLayout(
+                flow = flow,
+                actionNodes = editableNodes,
+            )
+        }
+        val baseGutterEndPaddingDp = connectionGutterWidthDp(
+            laneCount = ACTION_LIST_MAX_VISIBLE_JUMP_LANES,
+        )
         Column(
             modifier = Modifier
                 .fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            if (previewVisible) {
+                FlowPreviewPanel(
+                    state = state,
+                    onNodeClick = { flowId, nodeId -> openNodeEditor(flowId, nodeId) },
+                )
+            }
             if (editableNodes.isEmpty()) {
                 Text(
                     text = "当前流程暂无可编辑动作",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-            }
-            editableNodes.forEach { node ->
-                Card(
-                    onClick = {
-                        store.selectNode(node.nodeId)
-                        settingsRoute = SettingsRoute.NodeEditor(node.nodeId)
-                        touchUi()
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-                ) {
+            } else {
+                if (jumpLayout.overflowCount > 0) {
+                    Text(
+                        text = "连线较多，已折叠显示 +${jumpLayout.overflowCount}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Box(modifier = Modifier.fillMaxWidth()) {
                     Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(10.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        Text(
-                            text = node.nodeId,
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                        Text(
-                            text = nodeSummaryText(node),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        editableNodes.forEach { node ->
+                            val disabled = !node.flags.enabled
+                            Card(
+                                onClick = { openNodeEditor(state.selectedFlowId, node.nodeId) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(end = baseGutterEndPaddingDp.dp)
+                                    .graphicsLayer(alpha = if (disabled) 0.68f else 1f)
+                                    .onGloballyPositioned { coordinates ->
+                                        rowAnchors[node.nodeId] = RowAnchor(
+                                            centerY = coordinates.positionInParent().y + coordinates.size.height / 2f,
+                                            rightX = coordinates.positionInParent().x + coordinates.size.width,
+                                        )
+                                    },
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+                            ) {
+                                Box(modifier = Modifier.fillMaxWidth()) {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(10.dp)
+                                            .padding(end = 40.dp),
+                                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            Text(
+                                                text = node.nodeId,
+                                                style = MaterialTheme.typography.bodyMedium,
+                                            )
+                                            if (disabled) {
+                                                Text(
+                                                    text = "已禁用",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                )
+                                            }
+                                        }
+                                        Text(
+                                            text = nodeSummaryText(node),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                        if (
+                                            node.kind == NodeKind.JUMP ||
+                                            node.kind == NodeKind.FOLDER_REF ||
+                                            node.kind == NodeKind.SUB_TASK_REF
+                                        ) {
+                                            Text(
+                                                text = jumpTargetSummaryText(
+                                                    node = node,
+                                                    bundle = state.bundle,
+                                                    currentFlowId = state.selectedFlowId,
+                                                ),
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                        }
+                                        Text(
+                                            text = nodeTimingText(node),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                    Box(
+                                        modifier = Modifier
+                                            .align(Alignment.TopEnd)
+                                            .padding(top = 8.dp, end = 8.dp),
+                                    ) {
+                                        CircleActionIconButton(
+                                            onClick = { actionMenuNodeId = node.nodeId },
+                                            icon = { tint ->
+                                                Icon(
+                                                    imageVector = Icons.Rounded.MoreHoriz,
+                                                    contentDescription = "更多操作",
+                                                    tint = tint,
+                                                    modifier = Modifier.size(18.dp),
+                                                )
+                                            },
+                                        )
+                                        AppDropdownMenu(
+                                            expanded = actionMenuNodeId == node.nodeId,
+                                            onDismissRequest = { actionMenuNodeId = null },
+                                        ) {
+                                            AppDropdownMenuItem(
+                                                text = "编辑",
+                                                onClick = {
+                                                    actionMenuNodeId = null
+                                                    openNodeEditor(state.selectedFlowId, node.nodeId)
+                                                },
+                                            )
+                                            AppDropdownMenuItem(
+                                                text = "复制",
+                                                onClick = {
+                                                    actionMenuNodeId = null
+                                                    mutateSettingsEditor("已复制动作") {
+                                                        it.duplicateNode(node.nodeId)
+                                                    }
+                                                },
+                                            )
+                                            AppDropdownMenuItem(
+                                                text = if (disabled) "启用" else "禁用",
+                                                onClick = {
+                                                    actionMenuNodeId = null
+                                                    mutateSettingsEditor(
+                                                        message = if (disabled) "已启用动作" else "已禁用动作",
+                                                    ) {
+                                                        it.updateNodeEnabled(
+                                                            nodeId = node.nodeId,
+                                                            enabled = disabled,
+                                                        )
+                                                    }
+                                                },
+                                            )
+                                            AppDropdownMenuItem(
+                                                text = "删除",
+                                                destructive = true,
+                                                onClick = {
+                                                    actionMenuNodeId = null
+                                                    pendingDeleteNodeId = node.nodeId
+                                                },
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (jumpLayout.connections.isNotEmpty()) {
+                        JumpConnectionCanvas(
+                            rowAnchors = rowAnchors,
+                            connections = jumpLayout.connections,
+                            laneCount = jumpLayout.laneCount,
+                            onConnectionTap = null,
+                            modifier = Modifier.matchParentSize(),
                         )
                     }
                 }
             }
             Spacer(modifier = Modifier.height(8.dp))
         }
+        if (pendingDeleteNode != null) {
+            AlertDialog(
+                onDismissRequest = { pendingDeleteNodeId = null },
+                title = { Text("删除动作") },
+                text = {
+                    Text("确认删除动作 ${pendingDeleteNode.nodeId} 吗？")
+                },
+                confirmButton = {
+                    OutlinedButton(
+                        onClick = {
+                            val nodeId = pendingDeleteNode.nodeId
+                            pendingDeleteNodeId = null
+                            mutateSettingsEditor("已删除动作") {
+                                it.removeNode(nodeId)
+                            }
+                        },
+                    ) {
+                        Text("确认删除")
+                    }
+                },
+                dismissButton = {
+                    OutlinedButton(onClick = { pendingDeleteNodeId = null }) {
+                        Text("取消")
+                    }
+                },
+            )
+        }
+    }
+
+    @Composable
+    private fun FlowPreviewPanel(
+        state: TaskGraphEditorState,
+        onNodeClick: (String, String) -> Unit,
+    ) {
+        val flow = state.selectedFlow
+        if (flow == null) {
+            Text(
+                text = "当前流程不存在，无法预览",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            return
+        }
+        val crossFlowJumps = flow.nodes
+            .filter { node ->
+                node.kind == NodeKind.JUMP || node.kind == NodeKind.FOLDER_REF || node.kind == NodeKind.SUB_TASK_REF
+            }
+            .mapNotNull { node ->
+                val targetFlowId = node.params["targetFlowId"]?.toString()
+                    ?.takeIf { it.isNotBlank() }
+                    ?: flow.flowId
+                val targetNodeId = node.params["targetNodeId"]?.toString().orEmpty()
+                if (targetFlowId == flow.flowId || targetNodeId.isBlank()) {
+                    return@mapNotNull null
+                }
+                Triple(node.nodeId, targetFlowId, targetNodeId)
+            }
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    text = "流程预览（图形）",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                FlowPreviewGraph(
+                    flow = flow,
+                    selectedNodeId = state.selectedNode?.nodeId,
+                    onSelectNode = { nodeId ->
+                        onNodeClick(flow.flowId, nodeId)
+                    },
+                    onOpenEdgeTarget = { nodeId ->
+                        onNodeClick(flow.flowId, nodeId)
+                    },
+                )
+                if (crossFlowJumps.isEmpty()) {
+                    Text(
+                        text = "当前流程没有跨流程跳转",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    Text(
+                        text = "跨流程跳转",
+                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                    )
+                    crossFlowJumps.forEach { (nodeId, targetFlowId, targetNodeId) ->
+                        val flowName = state.bundle.findFlow(targetFlowId)?.name ?: targetFlowId
+                        OutlinedButton(
+                            modifier = Modifier.fillMaxWidth(),
+                            onClick = { onNodeClick(targetFlowId, targetNodeId) },
+                        ) {
+                            Text("$nodeId => $flowName/$targetNodeId")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun JumpConnectionCanvas(
+        rowAnchors: SnapshotStateMap<String, RowAnchor>,
+        connections: List<JumpLaneConnection>,
+        laneCount: Int,
+        onConnectionTap: ((String) -> Unit)? = null,
+        modifier: Modifier = Modifier,
+    ) {
+        val forwardColor = MaterialTheme.colorScheme.primary
+        val backwardColor = MaterialTheme.colorScheme.secondary
+        val rowAnchorsSnapshot = rowAnchors.toMap()
+        val interactiveModifier = if (onConnectionTap == null) {
+            modifier
+        } else {
+            modifier.pointerInput(rowAnchorsSnapshot, connections, laneCount) {
+                detectTapGestures { tapOffset ->
+                    val thresholdPx = 14.dp.toPx()
+                    val thresholdSq = thresholdPx * thresholdPx
+                    var bestTarget: String? = null
+                    var bestDistSq = Float.MAX_VALUE
+                    val polylines = buildJumpPolylines(
+                        rowAnchors = rowAnchorsSnapshot,
+                        connections = connections,
+                        laneCount = laneCount,
+                        canvasWidth = size.width.toFloat(),
+                    )
+                    polylines.forEach { line ->
+                        val first = distanceSquaredToSegment(point = tapOffset, a = line.start, b = line.laneStart)
+                        val second = distanceSquaredToSegment(point = tapOffset, a = line.laneStart, b = line.laneEnd)
+                        val third = distanceSquaredToSegment(point = tapOffset, a = line.laneEnd, b = line.end)
+                        val nearest = minOf(first, second, third)
+                        if (nearest < bestDistSq) {
+                            bestDistSq = nearest
+                            bestTarget = line.targetNodeId
+                        }
+                    }
+                    if (bestDistSq <= thresholdSq) {
+                        bestTarget?.let { targetNodeId ->
+                            onConnectionTap.invoke(targetNodeId)
+                        }
+                    }
+                }
+            }
+        }
+        ComposeCanvas(modifier = interactiveModifier) {
+            val dash = PathEffect.dashPathEffect(floatArrayOf(6.dp.toPx(), 4.dp.toPx()), 0f)
+            val polylines = buildJumpPolylines(
+                rowAnchors = rowAnchors,
+                connections = connections,
+                laneCount = laneCount,
+                canvasWidth = size.width,
+            )
+            val startDotRadius = 2.dp.toPx()
+            val arrowLength = 10.dp.toPx()
+            val arrowWidth = 8.dp.toPx()
+            val dashedStroke = 2.dp.toPx()
+            val endStroke = 2.8.dp.toPx()
+            polylines.forEach { line ->
+                val paintColor = if (line.isForward) forwardColor else backwardColor
+                val alpha = if (line.isCollapsed) 0.58f else 0.92f
+                drawLine(
+                    color = paintColor.copy(alpha = alpha),
+                    start = line.start,
+                    end = line.laneStart,
+                    strokeWidth = dashedStroke,
+                    pathEffect = dash,
+                    cap = StrokeCap.Round,
+                )
+                drawLine(
+                    color = paintColor.copy(alpha = alpha),
+                    start = line.laneStart,
+                    end = line.laneEnd,
+                    strokeWidth = dashedStroke,
+                    pathEffect = dash,
+                    cap = StrokeCap.Round,
+                )
+                drawLine(
+                    color = paintColor.copy(alpha = if (line.isCollapsed) 0.76f else 1f),
+                    start = line.laneEnd,
+                    end = line.end,
+                    strokeWidth = endStroke,
+                    cap = StrokeCap.Round,
+                )
+                drawCircle(color = paintColor.copy(alpha = if (line.isCollapsed) 0.16f else 0.25f), radius = 4.dp.toPx(), center = line.end)
+                drawCircle(color = paintColor.copy(alpha = if (line.isCollapsed) 0.5f else 0.75f), radius = startDotRadius, center = line.start)
+                drawArrowHead(
+                    color = paintColor.copy(alpha = if (line.isCollapsed) 0.8f else 1f),
+                    from = line.laneEnd,
+                    to = line.end,
+                    lengthPx = arrowLength,
+                    widthPx = arrowWidth,
+                )
+            }
+        }
+    }
+
+    @Composable
+    private fun FlowPreviewGraph(
+        flow: TaskFlow,
+        selectedNodeId: String?,
+        onSelectNode: (String) -> Unit,
+        onOpenEdgeTarget: (String) -> Unit,
+    ) {
+        val defaultPoints = remember(flow) { calculateGraphPoints(flow) }
+        val pointOverrides = remember(flow.flowId) { mutableStateMapOf<String, GraphPoint>() }
+        var draggingNodeId by remember(flow.flowId) { mutableStateOf<String?>(null) }
+        var didDragInCurrentGesture by remember(flow.flowId) { mutableStateOf(false) }
+        var suppressNextTap by remember(flow.flowId) { mutableStateOf(false) }
+        LaunchedEffect(flow.flowId, flow.nodes.map { it.nodeId }) {
+            val validNodeIds = flow.nodes.map { it.nodeId }.toSet()
+            pointOverrides.keys.toList().forEach { nodeId ->
+                if (nodeId !in validNodeIds) {
+                    pointOverrides.remove(nodeId)
+                }
+            }
+            flow.nodes.forEach { node ->
+                if (!pointOverrides.containsKey(node.nodeId)) {
+                    defaultPoints[node.nodeId]?.let { pointOverrides[node.nodeId] = it }
+                }
+            }
+        }
+        val flowNodeIds = flow.nodes.map { it.nodeId }
+        val points = flow.nodes.associate { node ->
+            val point = pointOverrides[node.nodeId]
+                ?: defaultPoints[node.nodeId]
+                ?: GraphPoint(0.5f, 0.5f)
+            node.nodeId to point
+        }
+        val latestPoints = rememberUpdatedState(points)
+        val edgeColor = MaterialTheme.colorScheme.onSurfaceVariant
+        val jumpColor = MaterialTheme.colorScheme.primary
+        val nodeFillColor = MaterialTheme.colorScheme.surface
+        val nodeStrokeColor = MaterialTheme.colorScheme.outline
+        val containerColor = MaterialTheme.colorScheme.surfaceVariant
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(220.dp)
+                .background(containerColor, RoundedCornerShape(10.dp)),
+        ) {
+            ComposeCanvas(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(8.dp)
+                    .pointerInput(flow.flowId, flowNodeIds) {
+                        detectTapGestures { tapOffset ->
+                            if (suppressNextTap) {
+                                suppressNextTap = false
+                                return@detectTapGestures
+                            }
+                            val pointsSnapshot = latestPoints.value
+                            val width = size.width.toFloat()
+                            val height = size.height.toFloat()
+                            val clickedNodeId = findClosestGraphNodeId(
+                                points = pointsSnapshot,
+                                tapOffset = tapOffset,
+                                width = width,
+                                height = height,
+                                thresholdPx = 22.dp.toPx(),
+                            )
+                            if (clickedNodeId != null) {
+                                onSelectNode(clickedNodeId)
+                                return@detectTapGestures
+                            }
+                            val targetNodeId = findClosestPreviewEdgeTarget(
+                                flow = flow,
+                                points = pointsSnapshot,
+                                tapOffset = tapOffset,
+                                width = width,
+                                height = height,
+                                thresholdPx = 16.dp.toPx(),
+                            )
+                            if (targetNodeId != null) {
+                                onOpenEdgeTarget(targetNodeId)
+                            }
+                        }
+                    }
+                    .pointerInput(flow.flowId, flowNodeIds) {
+                        detectDragGestures(
+                            onDragStart = { dragStart ->
+                                didDragInCurrentGesture = false
+                                val pointsSnapshot = latestPoints.value
+                                val width = size.width.toFloat()
+                                val height = size.height.toFloat()
+                                draggingNodeId = findClosestGraphNodeId(
+                                    points = pointsSnapshot,
+                                    tapOffset = dragStart,
+                                    width = width,
+                                    height = height,
+                                    thresholdPx = 26.dp.toPx(),
+                                )
+                            },
+                            onDragCancel = {
+                                draggingNodeId = null
+                                didDragInCurrentGesture = false
+                            },
+                            onDragEnd = {
+                                if (didDragInCurrentGesture) {
+                                    suppressNextTap = true
+                                }
+                                draggingNodeId = null
+                                didDragInCurrentGesture = false
+                            },
+                        ) { change, dragAmount ->
+                            val nodeId = draggingNodeId ?: return@detectDragGestures
+                            didDragInCurrentGesture = true
+                            val width = size.width.toFloat().takeIf { it > 0f } ?: return@detectDragGestures
+                            val height = size.height.toFloat().takeIf { it > 0f } ?: return@detectDragGestures
+                            val current = pointOverrides[nodeId]
+                                ?: defaultPoints[nodeId]
+                                ?: return@detectDragGestures
+                            pointOverrides[nodeId] = GraphPoint(
+                                xRatio = (current.xRatio + (dragAmount.x / width)).coerceIn(0.08f, 0.92f),
+                                yRatio = (current.yRatio + (dragAmount.y / height)).coerceIn(0.08f, 0.92f),
+                            )
+                            change.consume()
+                        }
+                    },
+            ) {
+                val toOffset: (GraphPoint) -> Offset = { point ->
+                    Offset(point.xRatio * size.width, point.yRatio * size.height)
+                }
+                flow.edges.forEach { edge ->
+                    val from = points[edge.fromNodeId] ?: return@forEach
+                    val to = points[edge.toNodeId] ?: return@forEach
+                    drawLine(
+                        color = edgeColor,
+                        start = toOffset(from),
+                        end = toOffset(to),
+                        strokeWidth = 2.dp.toPx(),
+                        cap = StrokeCap.Round,
+                    )
+                }
+                flow.nodes
+                    .filter {
+                        it.kind == NodeKind.JUMP ||
+                            it.kind == NodeKind.FOLDER_REF ||
+                            it.kind == NodeKind.SUB_TASK_REF
+                    }
+                    .forEach { node ->
+                        val from = points[node.nodeId] ?: return@forEach
+                        val targetFlowId = node.params["targetFlowId"]?.toString()?.takeIf { it.isNotBlank() } ?: flow.flowId
+                        val targetNodeId = node.params["targetNodeId"]?.toString()?.takeIf { it.isNotBlank() } ?: return@forEach
+                        if (targetFlowId != flow.flowId) {
+                            return@forEach
+                        }
+                        val to = points[targetNodeId] ?: return@forEach
+                        drawLine(
+                            color = jumpColor,
+                            start = toOffset(from),
+                            end = toOffset(to),
+                            strokeWidth = 2.dp.toPx(),
+                            cap = StrokeCap.Round,
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(6.dp.toPx(), 4.dp.toPx()), 0f),
+                        )
+                    }
+                flow.nodes.forEach { node ->
+                    val point = points[node.nodeId] ?: return@forEach
+                    val center = toOffset(point)
+                    val isSelected = node.nodeId == selectedNodeId
+                    drawCircle(
+                        color = if (isSelected) jumpColor else nodeFillColor,
+                        radius = if (isSelected) 8.dp.toPx() else 7.dp.toPx(),
+                        center = center,
+                    )
+                    drawCircle(
+                        color = if (isSelected) jumpColor else nodeStrokeColor,
+                        radius = if (isSelected) 8.dp.toPx() else 7.dp.toPx(),
+                        center = center,
+                        style = Stroke(width = if (isSelected) 2.dp.toPx() else 1.dp.toPx()),
+                    )
+                }
+            }
+        }
+    }
+
+    private fun findClosestGraphNodeId(
+        points: Map<String, GraphPoint>,
+        tapOffset: Offset,
+        width: Float,
+        height: Float,
+        thresholdPx: Float,
+    ): String? {
+        if (points.isEmpty()) {
+            return null
+        }
+        var closestNodeId: String? = null
+        var closestDistSq = Float.MAX_VALUE
+        points.forEach { (nodeId, point) ->
+            val centerX = point.xRatio * width
+            val centerY = point.yRatio * height
+            val dx = tapOffset.x - centerX
+            val dy = tapOffset.y - centerY
+            val distSq = dx * dx + dy * dy
+            if (distSq < closestDistSq) {
+                closestDistSq = distSq
+                closestNodeId = nodeId
+            }
+        }
+        return if (closestDistSq <= thresholdPx * thresholdPx) closestNodeId else null
+    }
+
+    private fun findClosestPreviewEdgeTarget(
+        flow: TaskFlow,
+        points: Map<String, GraphPoint>,
+        tapOffset: Offset,
+        width: Float,
+        height: Float,
+        thresholdPx: Float,
+    ): String? {
+        var hitTarget: String? = null
+        var bestDistSq = thresholdPx * thresholdPx
+        val toOffset: (GraphPoint) -> Offset = { point ->
+            Offset(point.xRatio * width, point.yRatio * height)
+        }
+        flow.edges.forEach { edge ->
+            val from = points[edge.fromNodeId] ?: return@forEach
+            val to = points[edge.toNodeId] ?: return@forEach
+            val distSq = distanceSquaredToSegment(
+                point = tapOffset,
+                a = toOffset(from),
+                b = toOffset(to),
+            )
+            if (distSq < bestDistSq) {
+                bestDistSq = distSq
+                hitTarget = edge.toNodeId
+            }
+        }
+        flow.nodes
+            .filter {
+                it.kind == NodeKind.JUMP ||
+                    it.kind == NodeKind.FOLDER_REF ||
+                    it.kind == NodeKind.SUB_TASK_REF
+            }
+            .forEach { node ->
+                val targetFlowId = node.params["targetFlowId"]?.toString()?.takeIf { it.isNotBlank() } ?: flow.flowId
+                val targetNodeId = node.params["targetNodeId"]?.toString()?.takeIf { it.isNotBlank() } ?: return@forEach
+                if (targetFlowId != flow.flowId) {
+                    return@forEach
+                }
+                val from = points[node.nodeId] ?: return@forEach
+                val to = points[targetNodeId] ?: return@forEach
+                val distSq = distanceSquaredToSegment(
+                    point = tapOffset,
+                    a = toOffset(from),
+                    b = toOffset(to),
+                )
+                if (distSq < bestDistSq) {
+                    bestDistSq = distSq
+                    hitTarget = targetNodeId
+                }
+            }
+        return hitTarget
+    }
+
+    private fun distanceSquaredToSegment(
+        point: Offset,
+        a: Offset,
+        b: Offset,
+    ): Float {
+        val abX = b.x - a.x
+        val abY = b.y - a.y
+        val apX = point.x - a.x
+        val apY = point.y - a.y
+        val abLenSq = abX * abX + abY * abY
+        if (abLenSq <= 0f) {
+            val dx = point.x - a.x
+            val dy = point.y - a.y
+            return dx * dx + dy * dy
+        }
+        val t = ((apX * abX + apY * abY) / abLenSq).coerceIn(0f, 1f)
+        val projectionX = a.x + t * abX
+        val projectionY = a.y + t * abY
+        val dx = point.x - projectionX
+        val dy = point.y - projectionY
+        return dx * dx + dy * dy
+    }
+
+    private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawArrowHead(
+        color: androidx.compose.ui.graphics.Color,
+        from: Offset,
+        to: Offset,
+        lengthPx: Float,
+        widthPx: Float,
+    ) {
+        val dx = to.x - from.x
+        val dy = to.y - from.y
+        val lenSq = dx * dx + dy * dy
+        if (lenSq < 0.25f) {
+            return
+        }
+        val len = sqrt(lenSq)
+        val ux = dx / len
+        val uy = dy / len
+        val px = -uy
+        val py = ux
+        val baseX = to.x - ux * lengthPx
+        val baseY = to.y - uy * lengthPx
+        val left = Offset(baseX + px * widthPx * 0.5f, baseY + py * widthPx * 0.5f)
+        val right = Offset(baseX - px * widthPx * 0.5f, baseY - py * widthPx * 0.5f)
+        val arrowPath = ComposePath().apply {
+            moveTo(to.x, to.y)
+            lineTo(left.x, left.y)
+            lineTo(right.x, right.y)
+            close()
+        }
+        drawPath(
+            path = arrowPath,
+            color = color,
+        )
+    }
+
+    private data class RowAnchor(
+        val centerY: Float,
+        val rightX: Float,
+    )
+
+    private data class JumpLaneConnection(
+        val sourceNodeId: String,
+        val targetNodeId: String,
+        val lane: Int,
+        val startIndex: Int,
+        val endIndex: Int,
+        val isForward: Boolean,
+        val isCollapsed: Boolean,
+    )
+
+    private data class JumpConnectionLayout(
+        val connections: List<JumpLaneConnection>,
+        val laneCount: Int,
+        val overflowCount: Int,
+    )
+
+    private data class JumpPolyline(
+        val targetNodeId: String,
+        val start: Offset,
+        val laneStart: Offset,
+        val laneEnd: Offset,
+        val end: Offset,
+        val isForward: Boolean,
+        val isCollapsed: Boolean,
+    )
+
+    private data class IndexedJumpConnection(
+        val sourceNodeId: String,
+        val targetNodeId: String,
+        val sourceIndex: Int,
+        val targetIndex: Int,
+        val startIndex: Int,
+        val endIndex: Int,
+    )
+
+    private fun connectionGutterWidthDp(laneCount: Int): Float {
+        if (laneCount <= 0) {
+            return 0f
+        }
+        return 36f + ((laneCount - 1) * 12f)
+    }
+
+    private fun buildJumpConnectionLayout(
+        flow: TaskFlow,
+        actionNodes: List<FlowNode>,
+    ): JumpConnectionLayout {
+        val idToIndex = actionNodes
+            .mapIndexed { index, node -> node.nodeId to index }
+            .toMap()
+        if (idToIndex.isEmpty()) {
+            return JumpConnectionLayout(
+                connections = emptyList(),
+                laneCount = 0,
+                overflowCount = 0,
+            )
+        }
+        val indexedConnections = flow.nodes
+            .filter {
+                it.kind == NodeKind.JUMP || it.kind == NodeKind.FOLDER_REF || it.kind == NodeKind.SUB_TASK_REF
+            }
+            .mapNotNull { node ->
+                val fromIndex = idToIndex[node.nodeId] ?: return@mapNotNull null
+                val targetFlowId = node.params["targetFlowId"]?.toString()?.takeIf { it.isNotBlank() } ?: flow.flowId
+                val targetNodeId = node.params["targetNodeId"]?.toString()?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val toIndex = idToIndex[targetNodeId] ?: return@mapNotNull null
+                if (targetFlowId != flow.flowId || node.nodeId == targetNodeId) {
+                    return@mapNotNull null
+                }
+                IndexedJumpConnection(
+                    sourceNodeId = node.nodeId,
+                    targetNodeId = targetNodeId,
+                    sourceIndex = fromIndex,
+                    targetIndex = toIndex,
+                    startIndex = minOf(fromIndex, toIndex),
+                    endIndex = maxOf(fromIndex, toIndex),
+                )
+            }
+            .sortedWith(
+                compareBy<IndexedJumpConnection> { it.startIndex }
+                    .thenByDescending { it.endIndex - it.startIndex },
+            )
+        if (indexedConnections.isEmpty()) {
+            return JumpConnectionLayout(
+                connections = emptyList(),
+                laneCount = 0,
+                overflowCount = 0,
+            )
+        }
+        val maxVisibleLanes = ACTION_LIST_MAX_VISIBLE_JUMP_LANES.coerceAtLeast(1)
+        val laneLastEnd = mutableListOf<Int>()
+        var overflowCount = 0
+        val laneConnections = indexedConnections.map { connection ->
+            val fullLane = laneLastEnd.indexOfFirst { lastEnd -> lastEnd < connection.startIndex }
+                .takeIf { it >= 0 }
+                ?: run {
+                    laneLastEnd += Int.MIN_VALUE
+                    laneLastEnd.lastIndex
+                }
+            laneLastEnd[fullLane] = connection.endIndex
+            val isCollapsed = fullLane >= maxVisibleLanes
+            if (isCollapsed) {
+                overflowCount++
+            }
+            JumpLaneConnection(
+                sourceNodeId = connection.sourceNodeId,
+                targetNodeId = connection.targetNodeId,
+                lane = fullLane.coerceAtMost(maxVisibleLanes - 1),
+                startIndex = connection.startIndex,
+                endIndex = connection.endIndex,
+                isForward = connection.targetIndex > connection.sourceIndex,
+                isCollapsed = isCollapsed,
+            )
+        }
+        return JumpConnectionLayout(
+            connections = laneConnections,
+            laneCount = minOf(laneLastEnd.size, maxVisibleLanes),
+            overflowCount = overflowCount,
+        )
+    }
+
+    private fun buildJumpPolylines(
+        rowAnchors: Map<String, RowAnchor>,
+        connections: List<JumpLaneConnection>,
+        laneCount: Int,
+        canvasWidth: Float,
+    ): List<JumpPolyline> {
+        if (connections.isEmpty() || laneCount <= 0) {
+            return emptyList()
+        }
+        val rightMarginPx = dp(14).toFloat()
+        val laneSpacingPx = dp(12).toFloat()
+        val attachGapPx = dp(8).toFloat()
+        val maxLane = (laneCount - 1).coerceAtLeast(0)
+        fun laneX(lane: Int): Float {
+            val normalizedLane = lane.coerceIn(0, maxLane)
+            return canvasWidth - rightMarginPx - ((maxLane - normalizedLane) * laneSpacingPx)
+        }
+        return connections.mapNotNull { connection ->
+            val source = rowAnchors[connection.sourceNodeId] ?: return@mapNotNull null
+            val target = rowAnchors[connection.targetNodeId] ?: return@mapNotNull null
+            val start = Offset(source.rightX + attachGapPx, source.centerY)
+            val end = Offset(target.rightX + attachGapPx, target.centerY)
+            val laneVerticalX = laneX(connection.lane)
+            val safeVerticalX = maxOf(
+                laneVerticalX,
+                start.x + dp(6).toFloat(),
+                end.x + dp(6).toFloat(),
+            )
+            JumpPolyline(
+                targetNodeId = connection.targetNodeId,
+                start = start,
+                laneStart = Offset(safeVerticalX, start.y),
+                laneEnd = Offset(safeVerticalX, end.y),
+                end = end,
+                isForward = connection.isForward,
+                isCollapsed = connection.isCollapsed,
+            )
+        }
+    }
+
+    private data class GraphPoint(
+        val xRatio: Float,
+        val yRatio: Float,
+    )
+
+    private fun calculateGraphPoints(flow: TaskFlow): Map<String, GraphPoint> {
+        if (flow.nodes.isEmpty()) {
+            return emptyMap()
+        }
+        val trueTargets = flow.edges
+            .filter { it.conditionType == EdgeConditionType.TRUE }
+            .map { it.toNodeId }
+            .toSet()
+        val falseTargets = flow.edges
+            .filter { it.conditionType == EdgeConditionType.FALSE }
+            .map { it.toNodeId }
+            .toSet()
+        val denominator = (flow.nodes.size - 1).coerceAtLeast(1)
+        return flow.nodes.mapIndexed { index, node ->
+            val x = when {
+                node.nodeId in trueTargets && node.nodeId !in falseTargets -> 0.28f
+                node.nodeId in falseTargets && node.nodeId !in trueTargets -> 0.72f
+                else -> 0.5f
+            }
+            val y = 0.1f + (0.8f * (index.toFloat() / denominator.toFloat()))
+            node.nodeId to GraphPoint(
+                xRatio = x.coerceIn(0.12f, 0.88f),
+                yRatio = y.coerceIn(0.08f, 0.92f),
+            )
+        }.toMap()
     }
 
     @Composable
@@ -1818,41 +2780,110 @@ class TaskControlPanelGlobalOverlay(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            if (node.kind == NodeKind.ACTION) {
+            if (node.kind == NodeKind.JUMP) {
+                val resolvedTargetFlowId = node.params["targetFlowId"]?.toString()
+                    ?.takeIf { it.isNotBlank() }
+                    ?: state.selectedFlowId
+                val targetFlow = state.bundle.findFlow(resolvedTargetFlowId)
+                    ?: state.selectedFlow
+                val selectableNodes = targetFlow?.nodes
+                    ?.filterNot { it.kind == NodeKind.START }
+                    .orEmpty()
+                val resolvedTargetNodeId = node.params["targetNodeId"]?.toString()
+                    ?.takeIf { it.isNotBlank() }
+                    ?: selectableNodes.firstOrNull()?.nodeId
+                    .orEmpty()
+                val targetNode = selectableNodes.firstOrNull { it.nodeId == resolvedTargetNodeId }
+                var flowMenuExpanded by remember(node.nodeId) { mutableStateOf(false) }
+                var nodeMenuExpanded by remember(node.nodeId) { mutableStateOf(false) }
+
                 Text(
-                    text = "动作类型",
+                    text = "跳转目标",
                     style = MaterialTheme.typography.bodySmall,
+                )
+                Text(
+                    text = "targetFlowId=目标流程，targetNodeId=该流程中的目标动作",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    listOf(
-                        ActionType.CLICK,
-                        ActionType.SWIPE,
-                        ActionType.RECORD,
-                        ActionType.DUP_CLICK,
-                    ).forEach { type ->
-                        val selected = node.actionType == type
-                        if (selected) {
-                            OutlinedButton(
-                                onClick = { },
-                            ) {
-                                Text(type.name)
+                    Box(modifier = Modifier.weight(1f)) {
+                        OutlinedButton(
+                            modifier = Modifier.fillMaxWidth(),
+                            onClick = { flowMenuExpanded = true },
+                        ) {
+                            Text(targetFlow?.name ?: resolvedTargetFlowId)
+                        }
+                        AppDropdownMenu(
+                            expanded = flowMenuExpanded,
+                            onDismissRequest = { flowMenuExpanded = false },
+                        ) {
+                            state.bundle.flows.forEach { flow ->
+                                AppDropdownMenuItem(
+                                    text = "流程: ${flow.name}",
+                                    onClick = {
+                                        flowMenuExpanded = false
+                                        mutateSettingsEditor("已更新跳转流程") {
+                                            it.updateSelectedNodeParam("targetFlowId", flow.flowId)
+                                            it.updateSelectedNodeParam(
+                                                "targetNodeId",
+                                                flow.nodes
+                                                    .firstOrNull { item -> item.kind != NodeKind.START }
+                                                    ?.nodeId
+                                                    .orEmpty(),
+                                            )
+                                        }
+                                    },
+                                )
                             }
-                        } else {
-                            OutlinedButton(
-                                onClick = {
-                                    mutateSettingsEditor("已更新动作类型") {
-                                        it.updateSelectedNodeActionType(type)
-                                    }
-                                },
-                            ) {
-                                Text(type.name)
+                        }
+                    }
+                    Box(modifier = Modifier.weight(1f)) {
+                        OutlinedButton(
+                            modifier = Modifier.fillMaxWidth(),
+                            onClick = { nodeMenuExpanded = true },
+                        ) {
+                            Text(targetNode?.nodeId ?: "选择动作")
+                        }
+                        AppDropdownMenu(
+                            expanded = nodeMenuExpanded,
+                            onDismissRequest = { nodeMenuExpanded = false },
+                        ) {
+                            if (selectableNodes.isEmpty()) {
+                                AppDropdownMenuItem(
+                                    text = "无可选动作",
+                                    onClick = { nodeMenuExpanded = false },
+                                )
+                            } else {
+                                selectableNodes.forEach { candidate ->
+                                    AppDropdownMenuItem(
+                                        text = "${candidate.nodeId} · ${nodeSummaryText(candidate)}",
+                                        onClick = {
+                                            nodeMenuExpanded = false
+                                            mutateSettingsEditor("已更新跳转动作") {
+                                                it.updateSelectedNodeParam(
+                                                    "targetFlowId",
+                                                    targetFlow?.flowId ?: resolvedTargetFlowId,
+                                                )
+                                                it.updateSelectedNodeParam("targetNodeId", candidate.nodeId)
+                                            }
+                                        },
+                                    )
+                                }
                             }
                         }
                     }
                 }
+            }
+            if (node.kind == NodeKind.ACTION) {
+                Text(
+                    text = "动作类型：${node.actionType?.name ?: "-"}（创建后固定）",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
             if (node.kind == NodeKind.ACTION && node.actionType == ActionType.CLICK) {
                 val (screenWidth, screenHeight) = currentScreenSizePx()
@@ -1919,11 +2950,15 @@ class TaskControlPanelGlobalOverlay(
                     Text("屏幕拖动调整点击位置")
                 }
             }
-            val paramsSnapshot = node.params
+            val paramsSnapshot = com.ksxkq.cmm_clicker.feature.editor.EditorParamSchemaRegistry
+                .mergedParamsWithDefaults(node)
                 .filterNot { (key, _) ->
                     node.kind == NodeKind.ACTION &&
                         node.actionType == ActionType.CLICK &&
                         (key == "x" || key == "y")
+                }.filterNot { (key, _) ->
+                    node.kind == NodeKind.JUMP &&
+                        (key == "targetFlowId" || key == "targetNodeId")
                 }
                 .toSortedMap()
             if (paramsSnapshot.isEmpty()) {
@@ -1947,24 +2982,6 @@ class TaskControlPanelGlobalOverlay(
                     )
                 }
             }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                OutlinedButton(
-                    modifier = Modifier.fillMaxWidth(),
-                    onClick = {
-                        val removed = store.removeSelectedNode()
-                        if (removed) {
-                            persistSettingsEditor("已删除动作")
-                            settingsRoute = SettingsRoute.ActionList
-                            touchUi()
-                        }
-                    },
-                ) {
-                    Text("删除动作")
-                }
-            }
         }
     }
 
@@ -1980,10 +2997,61 @@ class TaskControlPanelGlobalOverlay(
         }
     }
 
+    private fun jumpTargetSummaryText(
+        node: FlowNode,
+        bundle: TaskBundle,
+        currentFlowId: String,
+    ): String {
+        val targetFlowId = node.params["targetFlowId"]?.toString()
+            ?.takeIf { it.isNotBlank() }
+            ?: currentFlowId
+        val targetNodeId = node.params["targetNodeId"]?.toString().orEmpty()
+        val flowName = bundle.findFlow(targetFlowId)?.name ?: targetFlowId
+        return "跳转 -> $flowName/$targetNodeId"
+    }
+
+    private fun nodeTimingText(node: FlowNode): String {
+        val durationMs = when (node.kind) {
+            NodeKind.ACTION -> parseLongParam(
+                value = node.params["durationMs"],
+                fallback = defaultActionDurationMs(node.actionType),
+            )
+
+            else -> parseLongParam(
+                value = node.params["durationMs"],
+                fallback = 0L,
+            )
+        }.coerceAtLeast(0L)
+        val postDelayMs = parseLongParam(
+            value = node.params["postDelayMs"],
+            fallback = 0L,
+        ).coerceAtLeast(0L)
+        return "持续 ${durationMs}ms | 延迟 ${postDelayMs}ms"
+    }
+
+    private fun defaultActionDurationMs(actionType: ActionType?): Long {
+        return when (actionType) {
+            ActionType.CLICK -> 60L
+            ActionType.SWIPE -> 300L
+            ActionType.RECORD -> 400L
+            ActionType.DUP_CLICK -> 50L
+            else -> 0L
+        }
+    }
+
     private fun parseDoubleParam(value: Any?, fallback: Double): Double {
         val parsed = when (value) {
             is Number -> value.toDouble()
             is String -> value.toDoubleOrNull()
+            else -> null
+        }
+        return parsed ?: fallback
+    }
+
+    private fun parseLongParam(value: Any?, fallback: Long): Long {
+        val parsed = when (value) {
+            is Number -> value.toLong()
+            is String -> value.toLongOrNull()
             else -> null
         }
         return parsed ?: fallback
@@ -2084,10 +3152,12 @@ class TaskControlPanelGlobalOverlay(
     }
 
     private fun startLastTask() {
-        if (running) {
+        if (running || runTaskJob?.isActive == true) {
             return
         }
-        scope.launch {
+        runTaskJob = scope.launch {
+            val launchJob = this
+            try {
             val candidateTaskId = resolveCandidateTaskId()
             if (candidateTaskId == null) {
                 statusText = "没有可执行任务"
@@ -2106,21 +3176,14 @@ class TaskControlPanelGlobalOverlay(
             running = true
             statusText = "运行中..."
             touchUi()
-            val result = runCatching {
-                withContext(Dispatchers.Default) {
-                    FlowRuntimeEngine(
-                        options = RuntimeEngineOptions(
-                            dryRun = false,
-                            maxSteps = 200,
-                            stopOnValidationError = true,
-                        ),
-                    ).execute(task.bundle)
-                }
-            }.getOrElse { error ->
-                running = false
-                statusText = "运行失败: ${error.message ?: "unknown"}"
-                touchUi()
-                return@launch
+            val result = withContext(Dispatchers.Default) {
+                FlowRuntimeEngine(
+                    options = RuntimeEngineOptions(
+                        dryRun = false,
+                        maxSteps = 200,
+                        stopOnValidationError = true,
+                    ),
+                ).execute(task.bundle)
             }
             val summary = buildString {
                 append("模式=REAL ")
@@ -2136,10 +3199,34 @@ class TaskControlPanelGlobalOverlay(
                 )
             }
             loadTasks()
-            running = false
             statusText = summary
             touchUi()
+            } catch (_: CancellationException) {
+                statusText = "任务已停止"
+                touchUi()
+            } catch (error: Throwable) {
+                statusText = "运行失败: ${error.message ?: "unknown"}"
+                touchUi()
+            } finally {
+                running = false
+                if (runTaskJob === launchJob) {
+                    runTaskJob = null
+                }
+                touchUi()
+            }
         }
+    }
+
+    private fun stopRunningTask() {
+        val job = runTaskJob
+        if (job == null || !job.isActive) {
+            statusText = "当前没有运行中的任务"
+            touchUi()
+            return
+        }
+        statusText = "正在停止任务..."
+        touchUi()
+        job.cancel(CancellationException("user_requested_stop"))
     }
 
     private fun startRecordingTicker() {

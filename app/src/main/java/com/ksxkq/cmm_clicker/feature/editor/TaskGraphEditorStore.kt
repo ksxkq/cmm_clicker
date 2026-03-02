@@ -198,6 +198,7 @@ class TaskGraphEditorStore(
                 "x" to "0.5",
                 "y" to "0.5",
                 "durationMs" to "60",
+                "postDelayMs" to "0",
             ),
         )
         mutate {
@@ -213,10 +214,18 @@ class TaskGraphEditorStore(
     fun removeSelectedNode(): Boolean {
         val flow = bundle.findFlow(selectedFlowId) ?: return false
         val nodeId = selectedNodeId ?: return false
+        if (flow.findNode(nodeId) == null) {
+            return false
+        }
         if (nodeId == flow.entryNodeId) {
             return false
         }
-        if (flow.findNode(nodeId) == null) {
+        return removeNode(nodeId)
+    }
+
+    fun removeNode(nodeId: String): Boolean {
+        val flow = bundle.findFlow(selectedFlowId) ?: return false
+        if (flow.findNode(nodeId) == null || nodeId == flow.entryNodeId) {
             return false
         }
         mutate {
@@ -225,16 +234,40 @@ class TaskGraphEditorStore(
             val updatedEdges = refreshedFlow.edges.filterNot {
                 it.fromNodeId == nodeId || it.toNodeId == nodeId
             }
-            val fallbackNodeId = updatedNodes.firstOrNull()?.nodeId
             updateFlow(
                 refreshedFlow.copy(
                     nodes = updatedNodes,
                     edges = updatedEdges,
                 ),
             )
-            selectedNodeId = fallbackNodeId
+            if (selectedNodeId == nodeId) {
+                selectedNodeId = updatedNodes.firstOrNull()?.nodeId
+            }
         }
         return true
+    }
+
+    fun duplicateNode(nodeId: String): String? {
+        val flow = bundle.findFlow(selectedFlowId) ?: return null
+        val sourceNode = flow.findNode(nodeId) ?: return null
+        if (sourceNode.kind == NodeKind.START || sourceNode.kind == NodeKind.END) {
+            return null
+        }
+        val duplicatedNodeId = generateNodeId(flow)
+        mutate {
+            val refreshedFlow = bundle.findFlow(selectedFlowId) ?: return@mutate
+            val sourceIndex = refreshedFlow.nodes.indexOfFirst { it.nodeId == nodeId }
+            if (sourceIndex < 0) {
+                return@mutate
+            }
+            val duplicatedNode = refreshedFlow.nodes[sourceIndex].copy(nodeId = duplicatedNodeId)
+            val updatedNodes = refreshedFlow.nodes.toMutableList().apply {
+                add((sourceIndex + 1).coerceAtMost(size), duplicatedNode)
+            }
+            updateFlow(refreshedFlow.copy(nodes = updatedNodes))
+            selectedNodeId = duplicatedNodeId
+        }
+        return duplicatedNodeId
     }
 
     fun moveSelectedNode(up: Boolean) {
@@ -399,6 +432,23 @@ class TaskGraphEditorStore(
         updateSelectedNode { node ->
             node.copy(flags = node.flags.copy(enabled = enabled))
         }
+    }
+
+    fun updateNodeEnabled(nodeId: String, enabled: Boolean): Boolean {
+        val flow = bundle.findFlow(selectedFlowId) ?: return false
+        val targetNode = flow.findNode(nodeId) ?: return false
+        mutate {
+            val refreshedFlow = bundle.findFlow(selectedFlowId) ?: return@mutate
+            val updatedNodes = refreshedFlow.nodes.map { node ->
+                if (node.nodeId == targetNode.nodeId) {
+                    node.copy(flags = node.flags.copy(enabled = enabled))
+                } else {
+                    node
+                }
+            }
+            updateFlow(refreshedFlow.copy(nodes = updatedNodes))
+        }
+        return true
     }
 
     fun updateSelectedNodeActive(active: Boolean) {

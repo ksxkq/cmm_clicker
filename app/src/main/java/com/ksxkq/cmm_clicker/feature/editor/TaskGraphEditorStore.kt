@@ -59,6 +59,10 @@ class TaskGraphEditorStore(
     private val undoStack = ArrayDeque<Snapshot>()
     private val redoStack = ArrayDeque<Snapshot>()
 
+    init {
+        normalizeAllFlowsInPlace()
+    }
+
     fun state(): TaskGraphEditorState {
         return TaskGraphEditorState(
             bundle = bundle,
@@ -79,6 +83,7 @@ class TaskGraphEditorStore(
         nextFlowSerial = detectNextFlowSerial(newBundle)
         nextNodeSerial = detectNextNodeSerial(newBundle)
         nextEdgeSerial = detectNextEdgeSerial(newBundle)
+        normalizeAllFlowsInPlace()
         undoStack.clear()
         redoStack.clear()
     }
@@ -537,15 +542,62 @@ class TaskGraphEditorStore(
     }
 
     private fun updateFlow(updatedFlow: TaskFlow) {
+        val normalizedFlow = normalizeFlowSequentialAlwaysEdges(updatedFlow)
         bundle = bundle.copy(
             flows = bundle.flows.map { flow ->
-                if (flow.flowId == updatedFlow.flowId) {
-                    updatedFlow
+                if (flow.flowId == normalizedFlow.flowId) {
+                    normalizedFlow
                 } else {
                     flow
                 }
             },
         )
+    }
+
+    private fun normalizeAllFlowsInPlace() {
+        bundle = bundle.copy(
+            flows = bundle.flows.map { flow ->
+                normalizeFlowSequentialAlwaysEdges(flow)
+            },
+        )
+    }
+
+    private fun normalizeFlowSequentialAlwaysEdges(flow: TaskFlow): TaskFlow {
+        if (flow.nodes.isEmpty()) {
+            return flow.copy(edges = emptyList())
+        }
+        val validNodeIds = flow.nodes.map { it.nodeId }.toSet()
+        val preservedConditionalEdges = flow.edges.filter { edge ->
+            edge.conditionType != EdgeConditionType.ALWAYS &&
+                edge.fromNodeId in validNodeIds &&
+                edge.toNodeId in validNodeIds
+        }
+        val existingAlwaysByFromNodeId = flow.edges
+            .asSequence()
+            .filter { edge ->
+                edge.conditionType == EdgeConditionType.ALWAYS &&
+                    edge.fromNodeId in validNodeIds &&
+                    edge.toNodeId in validNodeIds
+            }
+            .groupBy { edge -> edge.fromNodeId }
+            .mapValues { (_, edges) -> edges.first() }
+        val rebuiltAlwaysEdges = flow.nodes
+            .zipWithNext()
+            .mapNotNull { (from, to) ->
+                if (from.kind == NodeKind.END) {
+                    return@mapNotNull null
+                }
+                val existing = existingAlwaysByFromNodeId[from.nodeId]
+                FlowEdge(
+                    edgeId = existing?.edgeId ?: generateEdgeId(flow),
+                    fromNodeId = from.nodeId,
+                    toNodeId = to.nodeId,
+                    conditionType = EdgeConditionType.ALWAYS,
+                    priority = existing?.priority ?: 0,
+                )
+            }
+        val normalizedEdges = preservedConditionalEdges + rebuiltAlwaysEdges
+        return flow.copy(edges = normalizedEdges)
     }
 
     private fun generateNodeId(flow: TaskFlow): String {

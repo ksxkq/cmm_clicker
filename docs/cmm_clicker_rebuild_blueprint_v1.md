@@ -321,3 +321,7 @@ interface ActionPlugin {
    - 节点新增统一 `postDelayMs`（执行后延迟）参数
    - 运行时在节点执行后（`NodeOutcome.CONTINUE`）应用该延迟（dry-run 跳过）
    - 编辑层与列表层已同步显示 `durationMs + postDelayMs` 摘要
+7. 编辑器数据一致性补齐：
+   - `TaskGraphEditorStore` 在初始化、reset、flow 更新时会统一执行主链归一化
+   - 归一化策略：仅重建 `ALWAYS` 顺序边（`START -> ... -> END`），保留有效的条件边（`TRUE/FALSE`）
+   - 目标是让流程图与动作列表的“线性主流程”语义保持一致，避免出现孤立节点导致预览与执行理解偏差

@@ -80,11 +80,15 @@ import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Path as ComposePath
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -118,6 +122,9 @@ import com.ksxkq.cmm_clicker.core.model.TaskBundle
 import com.ksxkq.cmm_clicker.core.model.TaskFlow
 import com.ksxkq.cmm_clicker.core.runtime.FlowRuntimeEngine
 import com.ksxkq.cmm_clicker.core.runtime.RuntimeEngineOptions
+import com.ksxkq.cmm_clicker.feature.editor.EditorParamSchemaRegistry
+import com.ksxkq.cmm_clicker.feature.editor.EditorParamValidator
+import com.ksxkq.cmm_clicker.feature.editor.ParamFieldDefinition
 import com.ksxkq.cmm_clicker.feature.editor.TaskGraphEditorState
 import com.ksxkq.cmm_clicker.feature.editor.TaskGraphEditorStore
 import com.ksxkq.cmm_clicker.feature.task.LocalFileTaskRepository
@@ -1740,7 +1747,6 @@ class TaskControlPanelGlobalOverlay(
         }
         val state = store.state()
         var addActionMenuExpanded by remember(task.taskId, state.selectedFlowId) { mutableStateOf(false) }
-        var previewVisible by remember(task.taskId, state.selectedFlowId) { mutableStateOf(false) }
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1811,11 +1817,6 @@ class TaskControlPanelGlobalOverlay(
             ) {
                 Text("保存")
             }
-            OutlinedButton(
-                onClick = { previewVisible = !previewVisible },
-            ) {
-                Text(if (previewVisible) "隐藏预览" else "流程预览")
-            }
         }
         Text(
             text = "任务：${task.name} | flow=${state.selectedFlowId}",
@@ -1862,12 +1863,6 @@ class TaskControlPanelGlobalOverlay(
                 .fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            if (previewVisible) {
-                FlowPreviewPanel(
-                    state = state,
-                    onNodeClick = { flowId, nodeId -> openNodeEditor(flowId, nodeId) },
-                )
-            }
             if (editableNodes.isEmpty()) {
                 Text(
                     text = "当前流程暂无可编辑动作",
@@ -2065,7 +2060,6 @@ class TaskControlPanelGlobalOverlay(
     @Composable
     private fun FlowPreviewPanel(
         state: TaskGraphEditorState,
-        onNodeClick: (String, String) -> Unit,
     ) {
         val flow = state.selectedFlow
         if (flow == null) {
@@ -2108,13 +2102,6 @@ class TaskControlPanelGlobalOverlay(
                 )
                 FlowPreviewGraph(
                     flow = flow,
-                    selectedNodeId = state.selectedNode?.nodeId,
-                    onSelectNode = { nodeId ->
-                        onNodeClick(flow.flowId, nodeId)
-                    },
-                    onOpenEdgeTarget = { nodeId ->
-                        onNodeClick(flow.flowId, nodeId)
-                    },
                 )
                 if (crossFlowJumps.isEmpty()) {
                     Text(
@@ -2129,12 +2116,11 @@ class TaskControlPanelGlobalOverlay(
                     )
                     crossFlowJumps.forEach { (nodeId, targetFlowId, targetNodeId) ->
                         val flowName = state.bundle.findFlow(targetFlowId)?.name ?: targetFlowId
-                        OutlinedButton(
-                            modifier = Modifier.fillMaxWidth(),
-                            onClick = { onNodeClick(targetFlowId, targetNodeId) },
-                        ) {
-                            Text("$nodeId => $flowName/$targetNodeId")
-                        }
+                        Text(
+                            text = "$nodeId => $flowName/$targetNodeId",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 }
             }
@@ -2240,132 +2226,51 @@ class TaskControlPanelGlobalOverlay(
     @Composable
     private fun FlowPreviewGraph(
         flow: TaskFlow,
-        selectedNodeId: String?,
-        onSelectNode: (String) -> Unit,
-        onOpenEdgeTarget: (String) -> Unit,
     ) {
-        val defaultPoints = remember(flow) { calculateGraphPoints(flow) }
-        val pointOverrides = remember(flow.flowId) { mutableStateMapOf<String, GraphPoint>() }
-        var draggingNodeId by remember(flow.flowId) { mutableStateOf<String?>(null) }
-        var didDragInCurrentGesture by remember(flow.flowId) { mutableStateOf(false) }
-        var suppressNextTap by remember(flow.flowId) { mutableStateOf(false) }
-        LaunchedEffect(flow.flowId, flow.nodes.map { it.nodeId }) {
-            val validNodeIds = flow.nodes.map { it.nodeId }.toSet()
-            pointOverrides.keys.toList().forEach { nodeId ->
-                if (nodeId !in validNodeIds) {
-                    pointOverrides.remove(nodeId)
-                }
-            }
-            flow.nodes.forEach { node ->
-                if (!pointOverrides.containsKey(node.nodeId)) {
-                    defaultPoints[node.nodeId]?.let { pointOverrides[node.nodeId] = it }
-                }
-            }
+        val chainNodes = remember(flow) { buildPreviewChainNodes(flow) }
+        val points = remember(flow, chainNodes.map { it.nodeId }) {
+            calculatePreviewReadOnlyPoints(chainNodes)
         }
-        val flowNodeIds = flow.nodes.map { it.nodeId }
-        val points = flow.nodes.associate { node ->
-            val point = pointOverrides[node.nodeId]
-                ?: defaultPoints[node.nodeId]
-                ?: GraphPoint(0.5f, 0.5f)
-            node.nodeId to point
+        val jumpLinks = remember(flow, chainNodes.map { it.nodeId }) {
+            buildPreviewJumpLinks(flow = flow, chainNodes = chainNodes)
         }
-        val latestPoints = rememberUpdatedState(points)
         val edgeColor = MaterialTheme.colorScheme.onSurfaceVariant
         val jumpColor = MaterialTheme.colorScheme.primary
         val nodeFillColor = MaterialTheme.colorScheme.surface
         val nodeStrokeColor = MaterialTheme.colorScheme.outline
         val containerColor = MaterialTheme.colorScheme.surfaceVariant
+        val startNodeColor = androidx.compose.ui.graphics.Color(0xFF16A34A)
+        val endNodeColor = androidx.compose.ui.graphics.Color(0xFFDC2626)
+        val labelBgColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
+        val labelTextColor = MaterialTheme.colorScheme.onSurface
+        val jumpLabelTextColor = MaterialTheme.colorScheme.onSurface
+        val labelTextPaint = remember(flow.flowId) { Paint(Paint.ANTI_ALIAS_FLAG) }
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(220.dp)
                 .background(containerColor, RoundedCornerShape(10.dp)),
         ) {
+            if (chainNodes.isEmpty()) {
+                Text(
+                    text = "当前流程无可预览节点",
+                    modifier = Modifier.align(Alignment.Center),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                return@Box
+            }
             ComposeCanvas(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(8.dp)
-                    .pointerInput(flow.flowId, flowNodeIds) {
-                        detectTapGestures { tapOffset ->
-                            if (suppressNextTap) {
-                                suppressNextTap = false
-                                return@detectTapGestures
-                            }
-                            val pointsSnapshot = latestPoints.value
-                            val width = size.width.toFloat()
-                            val height = size.height.toFloat()
-                            val clickedNodeId = findClosestGraphNodeId(
-                                points = pointsSnapshot,
-                                tapOffset = tapOffset,
-                                width = width,
-                                height = height,
-                                thresholdPx = 22.dp.toPx(),
-                            )
-                            if (clickedNodeId != null) {
-                                onSelectNode(clickedNodeId)
-                                return@detectTapGestures
-                            }
-                            val targetNodeId = findClosestPreviewEdgeTarget(
-                                flow = flow,
-                                points = pointsSnapshot,
-                                tapOffset = tapOffset,
-                                width = width,
-                                height = height,
-                                thresholdPx = 16.dp.toPx(),
-                            )
-                            if (targetNodeId != null) {
-                                onOpenEdgeTarget(targetNodeId)
-                            }
-                        }
-                    }
-                    .pointerInput(flow.flowId, flowNodeIds) {
-                        detectDragGestures(
-                            onDragStart = { dragStart ->
-                                didDragInCurrentGesture = false
-                                val pointsSnapshot = latestPoints.value
-                                val width = size.width.toFloat()
-                                val height = size.height.toFloat()
-                                draggingNodeId = findClosestGraphNodeId(
-                                    points = pointsSnapshot,
-                                    tapOffset = dragStart,
-                                    width = width,
-                                    height = height,
-                                    thresholdPx = 26.dp.toPx(),
-                                )
-                            },
-                            onDragCancel = {
-                                draggingNodeId = null
-                                didDragInCurrentGesture = false
-                            },
-                            onDragEnd = {
-                                if (didDragInCurrentGesture) {
-                                    suppressNextTap = true
-                                }
-                                draggingNodeId = null
-                                didDragInCurrentGesture = false
-                            },
-                        ) { change, dragAmount ->
-                            val nodeId = draggingNodeId ?: return@detectDragGestures
-                            didDragInCurrentGesture = true
-                            val width = size.width.toFloat().takeIf { it > 0f } ?: return@detectDragGestures
-                            val height = size.height.toFloat().takeIf { it > 0f } ?: return@detectDragGestures
-                            val current = pointOverrides[nodeId]
-                                ?: defaultPoints[nodeId]
-                                ?: return@detectDragGestures
-                            pointOverrides[nodeId] = GraphPoint(
-                                xRatio = (current.xRatio + (dragAmount.x / width)).coerceIn(0.08f, 0.92f),
-                                yRatio = (current.yRatio + (dragAmount.y / height)).coerceIn(0.08f, 0.92f),
-                            )
-                            change.consume()
-                        }
-                    },
+                    .padding(8.dp),
             ) {
                 val toOffset: (GraphPoint) -> Offset = { point ->
                     Offset(point.xRatio * size.width, point.yRatio * size.height)
                 }
-                flow.edges.forEach { edge ->
-                    val from = points[edge.fromNodeId] ?: return@forEach
-                    val to = points[edge.toNodeId] ?: return@forEach
+                for (index in 0 until chainNodes.lastIndex) {
+                    val from = points[chainNodes[index].nodeId] ?: continue
+                    val to = points[chainNodes[index + 1].nodeId] ?: continue
                     drawLine(
                         color = edgeColor,
                         start = toOffset(from),
@@ -2374,43 +2279,172 @@ class TaskControlPanelGlobalOverlay(
                         cap = StrokeCap.Round,
                     )
                 }
-                flow.nodes
-                    .filter {
-                        it.kind == NodeKind.JUMP ||
-                            it.kind == NodeKind.FOLDER_REF ||
-                            it.kind == NodeKind.SUB_TASK_REF
-                    }
-                    .forEach { node ->
-                        val from = points[node.nodeId] ?: return@forEach
-                        val targetFlowId = node.params["targetFlowId"]?.toString()?.takeIf { it.isNotBlank() } ?: flow.flowId
-                        val targetNodeId = node.params["targetNodeId"]?.toString()?.takeIf { it.isNotBlank() } ?: return@forEach
-                        if (targetFlowId != flow.flowId) {
-                            return@forEach
-                        }
-                        val to = points[targetNodeId] ?: return@forEach
-                        drawLine(
-                            color = jumpColor,
-                            start = toOffset(from),
-                            end = toOffset(to),
-                            strokeWidth = 2.dp.toPx(),
-                            cap = StrokeCap.Round,
-                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(6.dp.toPx(), 4.dp.toPx()), 0f),
-                        )
-                    }
-                flow.nodes.forEach { node ->
+                val jumpDash = PathEffect.dashPathEffect(floatArrayOf(6.dp.toPx(), 4.dp.toPx()), 0f)
+                val jumpLabelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = jumpLabelTextColor.toArgb()
+                    textSize = 9.dp.toPx()
+                }
+                val rightMargin = 10.dp.toPx()
+                val laneSpacing = 13.dp.toPx()
+                val laneCount = jumpLinks.maxOfOrNull { it.lane + 1 } ?: 0
+                val maxLane = (laneCount - 1).coerceAtLeast(0)
+                jumpLinks.forEach { link ->
+                    val fromPoint = points[link.fromNodeId] ?: return@forEach
+                    val toPoint = points[link.toNodeId] ?: return@forEach
+                    val from = toOffset(fromPoint)
+                    val to = toOffset(toPoint)
+                    val laneX = size.width - rightMargin - ((maxLane - link.lane) * laneSpacing)
+                    val startBreak = Offset((from.x + 12.dp.toPx()).coerceAtMost(laneX - 6.dp.toPx()), from.y)
+                    val endBreak = Offset((to.x + 12.dp.toPx()).coerceAtMost(laneX - 6.dp.toPx()), to.y)
+                    drawLine(
+                        color = jumpColor.copy(alpha = 0.94f),
+                        start = from,
+                        end = startBreak,
+                        strokeWidth = 1.8.dp.toPx(),
+                        pathEffect = jumpDash,
+                        cap = StrokeCap.Round,
+                    )
+                    drawLine(
+                        color = jumpColor.copy(alpha = 0.94f),
+                        start = Offset(laneX, startBreak.y),
+                        end = Offset(laneX, endBreak.y),
+                        strokeWidth = 1.8.dp.toPx(),
+                        pathEffect = jumpDash,
+                        cap = StrokeCap.Round,
+                    )
+                    drawLine(
+                        color = jumpColor.copy(alpha = 0.94f),
+                        start = endBreak,
+                        end = to,
+                        strokeWidth = 1.8.dp.toPx(),
+                        pathEffect = jumpDash,
+                        cap = StrokeCap.Round,
+                    )
+                    drawArrowHead(
+                        color = jumpColor,
+                        from = endBreak,
+                        to = to,
+                        lengthPx = 8.dp.toPx(),
+                        widthPx = 6.dp.toPx(),
+                    )
+                    val label = "${link.fromLabel} → ${link.toLabel}"
+                    val labelWidth = jumpLabelPaint.measureText(label)
+                    val metrics = jumpLabelPaint.fontMetrics
+                    val labelHeight = metrics.descent - metrics.ascent
+                    val labelPaddingX = 4.dp.toPx()
+                    val labelPaddingY = 2.dp.toPx()
+                    val labelX = (laneX - labelWidth - labelPaddingX * 2f - 2.dp.toPx())
+                        .coerceAtLeast(2.dp.toPx())
+                    val labelY = ((startBreak.y + endBreak.y) / 2f - labelHeight / 2f - labelPaddingY)
+                        .coerceIn(2.dp.toPx(), size.height - labelHeight - labelPaddingY * 2f - 2.dp.toPx())
+                    drawRoundRect(
+                        color = labelBgColor,
+                        topLeft = Offset(labelX, labelY),
+                        size = Size(labelWidth + labelPaddingX * 2f, labelHeight + labelPaddingY * 2f),
+                        cornerRadius = CornerRadius(3.dp.toPx(), 3.dp.toPx()),
+                    )
+                    drawContext.canvas.nativeCanvas.drawText(
+                        label,
+                        labelX + labelPaddingX,
+                        labelY + labelPaddingY - metrics.ascent,
+                        jumpLabelPaint,
+                    )
+                }
+
+                chainNodes.forEach { node ->
                     val point = points[node.nodeId] ?: return@forEach
                     val center = toOffset(point)
-                    val isSelected = node.nodeId == selectedNodeId
-                    drawCircle(
-                        color = if (isSelected) jumpColor else nodeFillColor,
-                        radius = if (isSelected) 8.dp.toPx() else 7.dp.toPx(),
-                        center = center,
+                    val strokeWidth = 1.dp.toPx()
+                    when (node.kind) {
+                        NodeKind.START -> {
+                            val nodeWidth = 18.dp.toPx()
+                            val nodeHeight = 12.dp.toPx()
+                            val topLeft = Offset(center.x - nodeWidth / 2f, center.y - nodeHeight / 2f)
+                            drawRoundRect(
+                                color = startNodeColor.copy(alpha = 0.9f),
+                                topLeft = topLeft,
+                                size = Size(nodeWidth, nodeHeight),
+                                cornerRadius = CornerRadius(nodeHeight / 2f, nodeHeight / 2f),
+                            )
+                            drawRoundRect(
+                                color = startNodeColor.copy(alpha = 0.95f),
+                                topLeft = topLeft,
+                                size = Size(nodeWidth, nodeHeight),
+                                cornerRadius = CornerRadius(nodeHeight / 2f, nodeHeight / 2f),
+                                style = Stroke(width = strokeWidth),
+                            )
+                        }
+
+                        NodeKind.END -> {
+                            val radius = 8.dp.toPx()
+                            val diamondPath = ComposePath().apply {
+                                moveTo(center.x, center.y - radius)
+                                lineTo(center.x + radius, center.y)
+                                lineTo(center.x, center.y + radius)
+                                lineTo(center.x - radius, center.y)
+                                close()
+                            }
+                            drawPath(
+                                path = diamondPath,
+                                color = endNodeColor.copy(alpha = 0.9f),
+                            )
+                            drawPath(
+                                path = diamondPath,
+                                color = endNodeColor.copy(alpha = 0.95f),
+                                style = Stroke(width = strokeWidth),
+                            )
+                        }
+
+                        else -> {
+                            drawCircle(
+                                color = nodeFillColor,
+                                radius = 7.dp.toPx(),
+                                center = center,
+                            )
+                            drawCircle(
+                                color = nodeStrokeColor,
+                                radius = 7.dp.toPx(),
+                                center = center,
+                                style = Stroke(width = strokeWidth),
+                            )
+                        }
+                    }
+
+                    val label = previewNodeDisplayName(node)
+                    labelTextPaint.color = labelTextColor.toArgb()
+                    labelTextPaint.textSize = 10.dp.toPx()
+                    labelTextPaint.isFakeBoldText = false
+                    val metrics = labelTextPaint.fontMetrics
+                    val textWidth = labelTextPaint.measureText(label)
+                    val textHeight = metrics.descent - metrics.ascent
+                    val horizontalPadding = 5.dp.toPx()
+                    val verticalPadding = 3.dp.toPx()
+                    val labelWidth = textWidth + horizontalPadding * 2f
+                    val labelHeight = textHeight + verticalPadding * 2f
+                    val labelLeft = (center.x + 10.dp.toPx())
+                        .coerceAtMost(size.width - labelWidth - 2.dp.toPx())
+                        .coerceAtLeast(2.dp.toPx())
+                    val labelTop = (center.y - labelHeight / 2f)
+                        .coerceIn(2.dp.toPx(), size.height - labelHeight - 2.dp.toPx())
+                    drawRoundRect(
+                        color = labelBgColor,
+                        topLeft = Offset(labelLeft, labelTop),
+                        size = Size(labelWidth, labelHeight),
+                        cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx()),
                     )
-                    drawCircle(
-                        color = if (isSelected) jumpColor else nodeStrokeColor,
-                        radius = if (isSelected) 8.dp.toPx() else 7.dp.toPx(),
-                        center = center,
-                        style = Stroke(width = if (isSelected) 2.dp.toPx() else 1.dp.toPx()),
+                    drawRoundRect(
+                        color = nodeStrokeColor.copy(alpha = 0.8f),
+                        topLeft = Offset(labelLeft, labelTop),
+                        size = Size(labelWidth, labelHeight),
+                        cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx()),
+                        style = Stroke(width = 0.8.dp.toPx()),
+                    )
+                    val baseline = labelTop + verticalPadding - metrics.ascent
+                    drawContext.canvas.nativeCanvas.drawText(
+                        label,
+                        labelLeft + horizontalPadding,
+                        baseline,
+                        labelTextPaint,
                     )
                 }
             }
@@ -2723,31 +2757,124 @@ class TaskControlPanelGlobalOverlay(
         val yRatio: Float,
     )
 
-    private fun calculateGraphPoints(flow: TaskFlow): Map<String, GraphPoint> {
+    private data class PreviewJumpLink(
+        val fromNodeId: String,
+        val toNodeId: String,
+        val lane: Int,
+        val fromLabel: String,
+        val toLabel: String,
+    )
+
+    private fun buildPreviewChainNodes(flow: TaskFlow): List<FlowNode> {
         if (flow.nodes.isEmpty()) {
+            return emptyList()
+        }
+        val start = flow.nodes.firstOrNull { it.kind == NodeKind.START }
+            ?: flow.findNode(flow.entryNodeId)
+        val end = flow.nodes.firstOrNull { it.kind == NodeKind.END }
+        val middle = flow.nodes.filter { node ->
+            node.nodeId != start?.nodeId && node.nodeId != end?.nodeId
+        }
+        return buildList {
+            start?.let(::add)
+            addAll(middle)
+            end?.let(::add)
+        }
+    }
+
+    private fun calculatePreviewReadOnlyPoints(nodes: List<FlowNode>): Map<String, GraphPoint> {
+        if (nodes.isEmpty()) {
             return emptyMap()
         }
-        val trueTargets = flow.edges
-            .filter { it.conditionType == EdgeConditionType.TRUE }
-            .map { it.toNodeId }
-            .toSet()
-        val falseTargets = flow.edges
-            .filter { it.conditionType == EdgeConditionType.FALSE }
-            .map { it.toNodeId }
-            .toSet()
-        val denominator = (flow.nodes.size - 1).coerceAtLeast(1)
-        return flow.nodes.mapIndexed { index, node ->
-            val x = when {
-                node.nodeId in trueTargets && node.nodeId !in falseTargets -> 0.28f
-                node.nodeId in falseTargets && node.nodeId !in trueTargets -> 0.72f
-                else -> 0.5f
-            }
-            val y = 0.1f + (0.8f * (index.toFloat() / denominator.toFloat()))
+        val denominator = (nodes.size - 1).coerceAtLeast(1)
+        return nodes.mapIndexed { index, node ->
+            val y = 0.08f + (0.84f * (index.toFloat() / denominator.toFloat()))
             node.nodeId to GraphPoint(
-                xRatio = x.coerceIn(0.12f, 0.88f),
+                xRatio = 0.26f,
                 yRatio = y.coerceIn(0.08f, 0.92f),
             )
         }.toMap()
+    }
+
+    private fun buildPreviewJumpLinks(
+        flow: TaskFlow,
+        chainNodes: List<FlowNode>,
+    ): List<PreviewJumpLink> {
+        if (chainNodes.isEmpty()) {
+            return emptyList()
+        }
+        val indexByNode = chainNodes.mapIndexed { index, node -> node.nodeId to index }.toMap()
+        data class RawLink(
+            val fromNodeId: String,
+            val toNodeId: String,
+            val start: Int,
+            val end: Int,
+            val fromLabel: String,
+            val toLabel: String,
+        )
+        val rawLinks = flow.nodes
+            .filter { node ->
+                node.kind == NodeKind.JUMP || node.kind == NodeKind.FOLDER_REF || node.kind == NodeKind.SUB_TASK_REF
+            }
+            .mapNotNull { node ->
+                val fromIndex = indexByNode[node.nodeId] ?: return@mapNotNull null
+                val targetFlowId = node.params["targetFlowId"]?.toString()?.takeIf { it.isNotBlank() } ?: flow.flowId
+                val targetNodeId = node.params["targetNodeId"]?.toString()?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val toIndex = indexByNode[targetNodeId] ?: return@mapNotNull null
+                if (targetFlowId != flow.flowId || node.nodeId == targetNodeId) {
+                    return@mapNotNull null
+                }
+                RawLink(
+                    fromNodeId = node.nodeId,
+                    toNodeId = targetNodeId,
+                    start = minOf(fromIndex, toIndex),
+                    end = maxOf(fromIndex, toIndex),
+                    fromLabel = previewNodeDisplayName(node),
+                    toLabel = previewNodeDisplayName(chainNodes[toIndex]),
+                )
+            }
+            .sortedWith(compareBy<RawLink> { it.start }.thenByDescending { it.end - it.start })
+        if (rawLinks.isEmpty()) {
+            return emptyList()
+        }
+        val laneLastEnd = mutableListOf<Int>()
+        return rawLinks.map { link ->
+            val lane = laneLastEnd.indexOfFirst { lastEnd -> lastEnd < link.start }
+                .takeIf { it >= 0 }
+                ?: run {
+                    laneLastEnd += Int.MIN_VALUE
+                    laneLastEnd.lastIndex
+                }
+            laneLastEnd[lane] = link.end
+            PreviewJumpLink(
+                fromNodeId = link.fromNodeId,
+                toNodeId = link.toNodeId,
+                lane = lane,
+                fromLabel = if (link.fromLabel.length <= 8) link.fromLabel else link.fromLabel.take(7) + "…",
+                toLabel = if (link.toLabel.length <= 8) link.toLabel else link.toLabel.take(7) + "…",
+            )
+        }
+    }
+
+    private fun previewNodeDisplayName(node: FlowNode): String {
+        val raw = when (node.kind) {
+            NodeKind.START -> "开始"
+            NodeKind.END -> "结束"
+            NodeKind.ACTION -> {
+                val custom = node.params["name"]?.toString()?.trim().orEmpty()
+                if (custom.isNotEmpty()) {
+                    custom
+                } else {
+                    "${node.actionType?.name ?: "ACTION"} · ${node.nodeId}"
+                }
+            }
+
+            NodeKind.BRANCH -> "分支 · ${node.nodeId}"
+            NodeKind.JUMP -> "跳转 · ${node.nodeId}"
+            NodeKind.FOLDER_REF -> "文件夹 · ${node.nodeId}"
+            NodeKind.SUB_TASK_REF -> "子任务 · ${node.nodeId}"
+        }
+        return if (raw.length <= 16) raw else raw.take(15) + "…"
     }
 
     @Composable
@@ -2950,7 +3077,10 @@ class TaskControlPanelGlobalOverlay(
                     Text("屏幕拖动调整点击位置")
                 }
             }
-            val paramsSnapshot = com.ksxkq.cmm_clicker.feature.editor.EditorParamSchemaRegistry
+            val paramDefinitions = EditorParamSchemaRegistry
+                .fieldsFor(node)
+                .associateBy { it.key }
+            val paramsSnapshot = EditorParamSchemaRegistry
                 .mergedParamsWithDefaults(node)
                 .filterNot { (key, _) ->
                     node.kind == NodeKind.ACTION &&
@@ -2961,6 +3091,9 @@ class TaskControlPanelGlobalOverlay(
                         (key == "targetFlowId" || key == "targetNodeId")
                 }
                 .toSortedMap()
+            val groupedParams = paramsSnapshot
+                .toList()
+                .groupBy { (key, _) -> paramEditorGroupForKey(key) }
             if (paramsSnapshot.isEmpty()) {
                 Text(
                     text = "当前节点没有参数",
@@ -2968,20 +3101,96 @@ class TaskControlPanelGlobalOverlay(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             } else {
-                paramsSnapshot.forEach { (key, value) ->
-                    OutlinedTextField(
-                        value = value?.toString().orEmpty(),
-                        onValueChange = { next ->
-                            mutateSettingsEditor("已更新参数 $key") {
-                                it.updateSelectedNodeParam(key, next)
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text(key) },
-                        singleLine = true,
+                ParamEditorGroup.entries.forEach { group ->
+                    val entries = groupedParams[group].orEmpty()
+                    if (entries.isEmpty()) {
+                        return@forEach
+                    }
+                    Text(
+                        text = group.title,
+                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            entries.forEach { (key, value) ->
+                                val definition = paramDefinitions[key]
+                                val rawValue = value?.toString().orEmpty()
+                                var draft by remember(node.nodeId, key, rawValue) {
+                                    mutableStateOf(rawValue)
+                                }
+                                val validationError = remember(definition, draft) {
+                                    EditorParamValidator.validate(
+                                        definition = definition,
+                                        value = draft,
+                                    )
+                                }
+                                OutlinedTextField(
+                                    value = draft,
+                                    onValueChange = { next ->
+                                        draft = next
+                                        val nextError = EditorParamValidator.validate(
+                                            definition = definition,
+                                            value = next,
+                                        )
+                                        if (nextError == null) {
+                                            mutateSettingsEditor("已更新参数 $key") {
+                                                it.updateSelectedNodeParam(key, next)
+                                            }
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    label = { Text(definition?.label ?: key) },
+                                    supportingText = {
+                                        when {
+                                            !validationError.isNullOrBlank() -> Text(validationError)
+                                            !definition?.helperText.isNullOrBlank() -> Text(definition?.helperText.orEmpty())
+                                        }
+                                    },
+                                    isError = !validationError.isNullOrBlank(),
+                                    singleLine = true,
+                                )
+                            }
+                        }
+                    }
                 }
             }
+        }
+    }
+
+    private enum class ParamEditorGroup(val title: String) {
+        POSITION("位置/轨迹"),
+        TIMING("时序"),
+        TARGET("目标"),
+        BEHAVIOR("行为"),
+        ADVANCED("其它参数"),
+    }
+
+    private fun paramEditorGroupForKey(key: String): ParamEditorGroup {
+        return when (key) {
+            "x", "y", "startX", "startY", "endX", "endY", "points", "strokes", "timestampsMs" -> {
+                ParamEditorGroup.POSITION
+            }
+
+            "durationMs", "postDelayMs", "intervalMs", "count", "startDelayMs" -> {
+                ParamEditorGroup.TIMING
+            }
+
+            "targetFlowId", "targetNodeId" -> ParamEditorGroup.TARGET
+
+            "variableKey", "operator", "expectedValue" -> ParamEditorGroup.BEHAVIOR
+
+            else -> ParamEditorGroup.ADVANCED
         }
     }
 

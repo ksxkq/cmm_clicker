@@ -71,13 +71,18 @@ object BasicGesturePlugin : ActionPlugin {
                 }
 
                 ActionType.RECORD -> {
-                    val points = params.readPoints("points")
-                        ?: listOf(0.5 to 0.8, 0.5 to 0.2)
-                    val duration = params.readLong("durationMs", 400L)
-                    AccessibilityGestureExecutor.performRecordPath(
-                        points = points,
-                        durationMs = duration,
-                    )
+                    val strokes = params.readRecordStrokes("strokes")
+                    if (!strokes.isNullOrEmpty()) {
+                        AccessibilityGestureExecutor.performRecordStrokes(strokes)
+                    } else {
+                        val points = params.readPoints("points")
+                            ?: listOf(0.5 to 0.8, 0.5 to 0.2)
+                        val duration = params.readLong("durationMs", 400L)
+                        AccessibilityGestureExecutor.performRecordPath(
+                            points = points,
+                            durationMs = duration,
+                        )
+                    }
                 }
 
                 ActionType.DUP_CLICK -> {
@@ -198,4 +203,72 @@ private fun Map<String, Any?>.readPoints(key: String): List<Pair<Double, Double>
         }
     }
     return result.takeIf { it.isNotEmpty() }
+}
+
+private fun Map<String, Any?>.readRecordStrokes(
+    key: String,
+): List<AccessibilityGestureExecutor.GestureStroke>? {
+    val value = this[key] as? List<*> ?: return null
+    val result = mutableListOf<AccessibilityGestureExecutor.GestureStroke>()
+    value.forEach { item ->
+        val map = item as? Map<*, *> ?: return@forEach
+        val points = map.readAnyPoints("points") ?: return@forEach
+        val timestamps = map.readAnyLongList("timestampsMs") ?: emptyList()
+        val startDelay = map.readAnyLong("startDelayMs", 0L).coerceAtLeast(0L)
+        val duration = map.readAnyLong("durationMs", 400L).coerceAtLeast(1L)
+        result += AccessibilityGestureExecutor.GestureStroke(
+            points = points,
+            timestampsMs = timestamps,
+            startDelayMs = startDelay,
+            durationMs = duration,
+        )
+    }
+    return result.takeIf { it.isNotEmpty() }
+}
+
+private fun Map<*, *>.readAnyPoints(key: String): List<Pair<Double, Double>>? {
+    val value = this[key] as? List<*> ?: return null
+    val result = mutableListOf<Pair<Double, Double>>()
+    value.forEach { item ->
+        val map = item as? Map<*, *> ?: return@forEach
+        val x = when (val xValue = map["x"]) {
+            is Number -> xValue.toDouble()
+            is String -> xValue.toDoubleOrNull()
+            else -> null
+        }
+        val y = when (val yValue = map["y"]) {
+            is Number -> yValue.toDouble()
+            is String -> yValue.toDoubleOrNull()
+            else -> null
+        }
+        if (x != null && y != null) {
+            result += x to y
+        }
+    }
+    return result.takeIf { it.isNotEmpty() }
+}
+
+private fun Map<*, *>.readAnyLongList(key: String): List<Long>? {
+    val value = this[key] as? List<*> ?: return null
+    val result = mutableListOf<Long>()
+    value.forEach { item ->
+        val number = when (item) {
+            is Number -> item.toLong()
+            is String -> item.toLongOrNull()
+            else -> null
+        }
+        if (number != null) {
+            result += number
+        }
+    }
+    return result
+}
+
+private fun Map<*, *>.readAnyLong(key: String, default: Long): Long {
+    val value = this[key] ?: return default
+    return when (value) {
+        is Number -> value.toLong()
+        is String -> value.toLongOrNull() ?: default
+        else -> default
+    }
 }

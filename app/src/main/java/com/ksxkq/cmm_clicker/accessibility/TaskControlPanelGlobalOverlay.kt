@@ -1,8 +1,12 @@
 package com.ksxkq.cmm_clicker.accessibility
 
 import android.content.Context
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.PixelFormat
+import android.os.SystemClock
 import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
@@ -11,6 +15,7 @@ import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.TextView
 import androidx.compose.animation.AnimatedVisibility as AnimatedVisibilityBox
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
@@ -43,6 +48,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.FiberManualRecord
+import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Stop
@@ -59,6 +65,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Recomposer
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -100,6 +107,9 @@ import com.ksxkq.cmm_clicker.ui.TaskLibraryPanel
 import com.ksxkq.cmm_clicker.ui.theme.AppThemeMode
 import com.ksxkq.cmm_clicker.ui.theme.CmmClickerTheme
 import com.ksxkq.cmm_clicker.ui.theme.ThemePreferenceStore
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.UUID
 import kotlin.math.hypot
 import kotlin.math.roundToInt
@@ -109,6 +119,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -124,10 +135,33 @@ class TaskControlPanelGlobalOverlay(
         private const val KEY_LAST_STARTED_TASK_ID = "last_started_task_id"
     }
 
+    private data class RecordedStroke(
+        val points: List<Pair<Double, Double>>,
+        val timestampsMs: List<Long>,
+        val startDelayMs: Long,
+        val durationMs: Long,
+    )
+
     private sealed interface RecordedGesture {
         data class Click(val xRatio: Double, val yRatio: Double, val durationMs: Long) : RecordedGesture
 
-        data class Path(val points: List<Pair<Double, Double>>, val durationMs: Long) : RecordedGesture
+        data class MultiPath(
+            val strokes: List<RecordedStroke>,
+            val durationMs: Long,
+        ) : RecordedGesture
+    }
+
+    private data class PointerTrack(
+        val pointerId: Int,
+        val downTimeMs: Long,
+        val points: MutableList<Pair<Float, Float>> = mutableListOf(),
+        val timestampsMs: MutableList<Long> = mutableListOf(),
+        var upTimeMs: Long = downTimeMs,
+    )
+
+    private enum class PanelMode {
+        NORMAL,
+        RECORDING,
     }
 
     private sealed interface SettingsRoute {
@@ -155,12 +189,17 @@ class TaskControlPanelGlobalOverlay(
     private var settingsRecomposer: Recomposer? = null
     private var settingsRecomposerJob: Job? = null
     private var themeSyncJob: Job? = null
+    private var recordingTickerJob: Job? = null
 
     private var captureView: View? = null
-    private var captureStartX = 0f
-    private var captureStartY = 0f
-    private var captureStartTime = 0L
-    private val capturePath = mutableListOf<Pair<Float, Float>>()
+    private var captureTrailView: RecordingTrailOverlayView? = null
+    private val activePointerTracks = linkedMapOf<Int, PointerTrack>()
+    private val completedPointerTracks = mutableListOf<PointerTrack>()
+    private var gestureSessionStartTimeMs = 0L
+    private var captureLayoutParams: WindowManager.LayoutParams? = null
+    private var recordingStartedAtMs = 0L
+    private var recordingPausedAtMs = 0L
+    private var recordingPausedAccumulatedMs = 0L
 
     private var themeMode by mutableStateOf(AppThemeMode.MONO_LIGHT)
     private var tasks by mutableStateOf<List<TaskRecord>>(emptyList())
@@ -173,6 +212,13 @@ class TaskControlPanelGlobalOverlay(
     private var settingsEditorStore by mutableStateOf<TaskGraphEditorStore?>(null)
     private var running by mutableStateOf(false)
     private var recording by mutableStateOf(false)
+    private var recordingPaused by mutableStateOf(false)
+    private var replayingGesture by mutableStateOf(false)
+    private var panelMode by mutableStateOf(PanelMode.NORMAL)
+    private var recordingSaveDialogVisible by mutableStateOf(false)
+    private var recordingSaveTaskName by mutableStateOf("")
+    private var recordedStepCount by mutableIntStateOf(0)
+    private var recordingElapsedMs by mutableLongStateOf(0L)
     private var statusText by mutableStateOf("")
     private var uiRevision by mutableIntStateOf(0)
     private var panelAnimationToken by mutableIntStateOf(0)
@@ -182,6 +228,7 @@ class TaskControlPanelGlobalOverlay(
     private var panelOffsetY by mutableIntStateOf(dp(220))
     private var selectedTaskId by mutableStateOf(prefs.getString(KEY_SELECTED_TASK_ID, null))
     private var lastStartedTaskId by mutableStateOf(prefs.getString(KEY_LAST_STARTED_TASK_ID, null))
+    private val recordedGestures = mutableListOf<RecordedGesture>()
 
     fun show() {
         scope.launch {
@@ -196,6 +243,14 @@ class TaskControlPanelGlobalOverlay(
             settingsRoute = SettingsRoute.TaskList
             settingsTask = null
             settingsEditorStore = null
+            recordingSaveDialogVisible = false
+            recordingSaveTaskName = ""
+            panelMode = PanelMode.NORMAL
+            recordingPaused = false
+            replayingGesture = false
+            recordedGestures.clear()
+            recordedStepCount = 0
+            stopRecordingTicker(resetElapsed = true)
             panelDismissAnimating = false
             panelNeedsEntryAnimation = true
             panelAnimationToken++
@@ -209,6 +264,7 @@ class TaskControlPanelGlobalOverlay(
     fun hide() {
         themeSyncJob?.cancel()
         themeSyncJob = null
+        stopRecordingTicker(resetElapsed = true)
         stopCaptureOverlay()
         removeSettingsOverlay()
         removeOverlay()
@@ -231,7 +287,7 @@ class TaskControlPanelGlobalOverlay(
         }
         val owner = ControlOverlayComposeOwner().apply { attach() }
         val compose = ComposeView(context).apply {
-            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
             setViewTreeLifecycleOwner(owner)
             setViewTreeViewModelStoreOwner(owner)
             setViewTreeSavedStateRegistryOwner(owner)
@@ -360,6 +416,8 @@ class TaskControlPanelGlobalOverlay(
         settingsRoute = SettingsRoute.TaskList
         settingsTask = null
         settingsEditorStore = null
+        recordingSaveDialogVisible = false
+        recordingSaveTaskName = ""
     }
 
     private fun removeOverlay() {
@@ -383,6 +441,14 @@ class TaskControlPanelGlobalOverlay(
         panelNeedsEntryAnimation = true
         running = false
         recording = false
+        recordingPaused = false
+        replayingGesture = false
+        panelMode = PanelMode.NORMAL
+        recordingSaveDialogVisible = false
+        recordingSaveTaskName = ""
+        recordedGestures.clear()
+        recordedStepCount = 0
+        stopRecordingTicker(resetElapsed = true)
     }
 
     private fun panelWindowFlags(): Int {
@@ -473,7 +539,7 @@ class TaskControlPanelGlobalOverlay(
     }
 
     private fun openSettingsPanel() {
-        if (settingsVisible) {
+        if (settingsVisible || recordingSaveDialogVisible || panelMode == PanelMode.RECORDING) {
             return
         }
         panelNeedsEntryAnimation = false
@@ -501,12 +567,27 @@ class TaskControlPanelGlobalOverlay(
         touchUi()
         scope.launch {
             delay(200)
-            removeSettingsOverlay()
+            settingsVisible = false
+            settingsSheetVisible = false
+            settingsDismissAnimating = false
+            settingsRoute = SettingsRoute.TaskList
+            settingsTask = null
+            settingsEditorStore = null
+            if (!recordingSaveDialogVisible) {
+                removeSettingsOverlay()
+            }
             afterClosed?.invoke()
         }
     }
 
-    private fun onSettingsBackdropTap() {
+    private fun onAuxOverlayBackdropTap() {
+        if (recordingSaveDialogVisible) {
+            discardRecordingSession("已取消保存")
+            return
+        }
+        if (!settingsVisible) {
+            return
+        }
         when (settingsRoute) {
             SettingsRoute.TaskList -> closeSettingsPanel()
             SettingsRoute.ActionList -> {
@@ -598,7 +679,7 @@ class TaskControlPanelGlobalOverlay(
             panelEntered = true
             panelNeedsEntryAnimation = false
         }
-        val panelVisible = panelEntered && !panelDismissAnimating && !settingsVisible
+        val panelVisible = panelEntered && !panelDismissAnimating && !settingsVisible && !recordingSaveDialogVisible
         val panelAlpha by animateFloatAsState(
             targetValue = if (panelVisible) 1f else 0f,
             animationSpec = tween(durationMillis = 180),
@@ -630,7 +711,7 @@ class TaskControlPanelGlobalOverlay(
 
         Card(
             modifier = Modifier
-                .width(186.dp)
+                .width(if (panelMode == PanelMode.RECORDING) 222.dp else 186.dp)
                 .graphicsLayer {
                     alpha = panelAlpha
                     scaleX = panelScale
@@ -643,87 +724,148 @@ class TaskControlPanelGlobalOverlay(
             border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
             elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
         ) {
-            Row(
+            Column(
                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalAlignment = Alignment.CenterVertically,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                CircleActionIconButton(
-                    enabled = !settingsVisible,
-                    onClick = {
-                        if (panelDismissAnimating || settingsVisible) {
-                            return@CircleActionIconButton
+                Crossfade(
+                    targetState = panelMode,
+                    animationSpec = tween(durationMillis = 80, easing = FastOutSlowInEasing),
+                    label = "control_panel_mode",
+                ) { mode ->
+                    if (mode == PanelMode.RECORDING) {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    CircleActionIconButton(
+                                        enabled = recording,
+                                        filled = !recordingPaused,
+                                        onClick = { toggleRecordingPause() },
+                                        icon = { tint ->
+                                            Icon(
+                                                imageVector = if (recordingPaused) Icons.Rounded.PlayArrow else Icons.Rounded.Pause,
+                                                contentDescription = if (recordingPaused) "继续录制" else "暂停录制",
+                                                tint = tint,
+                                                modifier = Modifier.size(18.dp),
+                                            )
+                                        },
+                                    )
+                                    CircleActionIconButton(
+                                        enabled = recording || recordedStepCount > 0,
+                                        filled = true,
+                                        onClick = { stopRecordingSessionAndPromptSave() },
+                                        icon = { tint ->
+                                            Icon(
+                                                imageVector = Icons.Rounded.Stop,
+                                                contentDescription = "停止并保存",
+                                                tint = tint,
+                                                modifier = Modifier.size(18.dp),
+                                            )
+                                        },
+                                    )
+                                }
+                                Text(
+                                    text = formatRecordingDuration(recordingElapsedMs),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Text(
+                                text = if (recordingPaused) {
+                                    "录制已暂停 · $recordedStepCount 步"
+                                } else if (replayingGesture) {
+                                    "正在回放 · $recordedStepCount 步"
+                                } else {
+                                    "录制中 · $recordedStepCount 步"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                         }
-                        openSettingsPanel()
-                    },
-                    icon = { tint ->
-                        Icon(
-                            imageVector = Icons.Rounded.Settings,
-                            contentDescription = "设置",
-                            tint = tint,
-                            modifier = Modifier.size(18.dp),
-                        )
-                    },
-                )
-                CircleActionIconButton(
-                    enabled = !running && !settingsVisible,
-                    filled = recording,
-                    onClick = {
-                        if (panelDismissAnimating || settingsVisible) {
-                            return@CircleActionIconButton
+                    } else {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            CircleActionIconButton(
+                                enabled = !settingsVisible && !running,
+                                onClick = {
+                                    if (panelDismissAnimating || settingsVisible || running) {
+                                        return@CircleActionIconButton
+                                    }
+                                    openSettingsPanel()
+                                },
+                                icon = { tint ->
+                                    Icon(
+                                        imageVector = Icons.Rounded.Settings,
+                                        contentDescription = "设置",
+                                        tint = tint,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                },
+                            )
+                            CircleActionIconButton(
+                                enabled = !running && !settingsVisible,
+                                filled = false,
+                                onClick = {
+                                    if (panelDismissAnimating || settingsVisible || running) {
+                                        return@CircleActionIconButton
+                                    }
+                                    startRecordingSession()
+                                },
+                                icon = { tint ->
+                                    Icon(
+                                        imageVector = Icons.Rounded.FiberManualRecord,
+                                        contentDescription = "录制",
+                                        tint = tint,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                },
+                            )
+                            CircleActionIconButton(
+                                enabled = !running && !settingsVisible,
+                                filled = true,
+                                onClick = {
+                                    if (panelDismissAnimating || settingsVisible) {
+                                        return@CircleActionIconButton
+                                    }
+                                    startLastTask()
+                                },
+                                icon = { tint ->
+                                    Icon(
+                                        imageVector = Icons.Rounded.PlayArrow,
+                                        contentDescription = if (running) "运行中" else "开始",
+                                        tint = tint,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                },
+                            )
+                            CircleActionIconButton(
+                                enabled = !settingsVisible,
+                                onClick = {
+                                    if (!settingsVisible) {
+                                        dismissPanelWithAnimation()
+                                    }
+                                },
+                                icon = { tint ->
+                                    Icon(
+                                        imageVector = Icons.Rounded.Close,
+                                        contentDescription = "移除面板",
+                                        tint = tint,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                },
+                            )
                         }
-                        if (recording) {
-                            stopCaptureOverlay()
-                            recording = false
-                            statusText = "录制已取消"
-                            touchUi()
-                        } else {
-                            startCaptureOverlay()
-                        }
-                    },
-                    icon = { tint ->
-                        Icon(
-                            imageVector = if (recording) Icons.Rounded.Stop else Icons.Rounded.FiberManualRecord,
-                            contentDescription = if (recording) "停止录制" else "录制",
-                            tint = tint,
-                            modifier = Modifier.size(18.dp),
-                        )
-                    },
-                )
-                CircleActionIconButton(
-                    enabled = !running && !settingsVisible,
-                    filled = true,
-                    onClick = {
-                        if (panelDismissAnimating || settingsVisible) {
-                            return@CircleActionIconButton
-                        }
-                        startLastTask()
-                    },
-                    icon = { tint ->
-                        Icon(
-                            imageVector = Icons.Rounded.PlayArrow,
-                            contentDescription = if (running) "运行中" else "开始",
-                            tint = tint,
-                            modifier = Modifier.size(18.dp),
-                        )
-                    },
-                )
-                CircleActionIconButton(
-                    enabled = !settingsVisible,
-                    onClick = {
-                        if (!settingsVisible) {
-                            dismissPanelWithAnimation()
-                        }
-                    },
-                    icon = { tint ->
-                        Icon(
-                            imageVector = Icons.Rounded.Close,
-                            contentDescription = "移除面板",
-                            tint = tint,
-                            modifier = Modifier.size(18.dp),
-                        )
-                    },
-                )
+                    }
+                }
             }
         }
 
@@ -733,12 +875,18 @@ class TaskControlPanelGlobalOverlay(
 
     @Composable
     private fun SettingsOverlayContent() {
-        if (!settingsVisible) {
+        if (!settingsVisible && !recordingSaveDialogVisible) {
             return
         }
         val route = settingsRoute
+        val sheetVisible = settingsVisible && settingsSheetVisible
+        val scrimTargetAlpha = when {
+            sheetVisible -> OverlayStackMotion.SHEET_SCRIM_ALPHA
+            recordingSaveDialogVisible -> 0.5f
+            else -> 0f
+        }
         val settingsScrimAlpha by animateFloatAsState(
-            targetValue = if (settingsSheetVisible) OverlayStackMotion.SHEET_SCRIM_ALPHA else 0f,
+            targetValue = scrimTargetAlpha,
             animationSpec = tween(durationMillis = 220),
             label = "control_settings_scrim_alpha",
         )
@@ -752,10 +900,10 @@ class TaskControlPanelGlobalOverlay(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(MaterialTheme.colorScheme.scrim.copy(alpha = settingsScrimAlpha))
-                    .clickable { onSettingsBackdropTap() },
+                    .clickable { onAuxOverlayBackdropTap() },
             )
             AnimatedVisibilityBox(
-                visible = settingsSheetVisible,
+                visible = sheetVisible,
                 enter = fadeIn(
                     animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
                 ) + slideInVertically(
@@ -927,6 +1075,75 @@ class TaskControlPanelGlobalOverlay(
                         ) {
                             SettingsNodeEditorLayer(nodeId = nodeId)
                         }
+                    }
+                }
+            }
+            AnimatedVisibilityBox(
+                visible = recordingSaveDialogVisible,
+                enter = fadeIn(animationSpec = tween(durationMillis = 180)) + slideInVertically(
+                    animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
+                    initialOffsetY = { fullHeight -> (fullHeight * 0.1f).roundToInt() },
+                ),
+                exit = fadeOut(animationSpec = tween(durationMillis = 140)) + slideOutVertically(
+                    animationSpec = tween(durationMillis = 140, easing = FastOutSlowInEasing),
+                    targetOffsetY = { fullHeight -> (fullHeight * 0.06f).roundToInt() },
+                ),
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .padding(horizontal = 18.dp)
+                    .fillMaxWidth()
+                    .widthIn(max = 420.dp),
+            ) {
+                RecordingSaveDialogCard()
+            }
+        }
+    }
+
+    @Composable
+    private fun RecordingSaveDialogCard() {
+        Card(
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    text = "保存录制任务",
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    text = "已录制 $recordedStepCount 步动作，保存为新任务。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedTextField(
+                    value = recordingSaveTaskName,
+                    onValueChange = { recordingSaveTaskName = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("任务名称") },
+                    singleLine = true,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedButton(
+                        modifier = Modifier.weight(1f),
+                        onClick = { discardRecordingSession("已取消保存") },
+                    ) {
+                        Text("丢弃")
+                    }
+                    OutlinedButton(
+                        modifier = Modifier.weight(1f),
+                        onClick = { confirmSaveRecordingSession() },
+                    ) {
+                        Text("保存")
                     }
                 }
             }
@@ -1359,22 +1576,190 @@ class TaskControlPanelGlobalOverlay(
         }
     }
 
+    private fun startRecordingTicker() {
+        recordingTickerJob?.cancel()
+        recordingStartedAtMs = System.currentTimeMillis()
+        recordingPausedAtMs = 0L
+        recordingPausedAccumulatedMs = 0L
+        recordingElapsedMs = 0L
+        recordingTickerJob = scope.launch {
+            while (isActive && panelMode == PanelMode.RECORDING) {
+                updateRecordingElapsed()
+                delay(120)
+            }
+        }
+    }
+
+    private fun stopRecordingTicker(resetElapsed: Boolean) {
+        recordingTickerJob?.cancel()
+        recordingTickerJob = null
+        recordingPausedAtMs = 0L
+        recordingPausedAccumulatedMs = 0L
+        if (resetElapsed) {
+            recordingElapsedMs = 0L
+        }
+    }
+
+    private fun updateRecordingElapsed() {
+        if (recordingStartedAtMs <= 0L) {
+            recordingElapsedMs = 0L
+            return
+        }
+        val now = System.currentTimeMillis()
+        val activePausedDuration = if (recordingPaused && recordingPausedAtMs > 0L) {
+            (now - recordingPausedAtMs).coerceAtLeast(0L)
+        } else {
+            0L
+        }
+        recordingElapsedMs = (
+            now - recordingStartedAtMs - recordingPausedAccumulatedMs - activePausedDuration
+            ).coerceAtLeast(0L)
+    }
+
+    private fun formatRecordingDuration(ms: Long): String {
+        val totalSeconds = (ms / 1000L).coerceAtLeast(0L)
+        val hours = totalSeconds / 3600L
+        val minutes = (totalSeconds % 3600L) / 60L
+        val seconds = totalSeconds % 60L
+        return if (hours > 0L) {
+            String.format(Locale.getDefault(), "%02d:%02d:%02d", hours, minutes, seconds)
+        } else {
+            String.format(Locale.getDefault(), "%02d:%02d", minutes, seconds)
+        }
+    }
+
+    private fun startRecordingSession() {
+        if (recording || running) {
+            return
+        }
+        recordingPaused = false
+        replayingGesture = false
+        recordedGestures.clear()
+        recordedStepCount = 0
+        recordingSaveDialogVisible = false
+        recordingSaveTaskName = ""
+        statusText = "录制已开始，请在屏幕上执行手势"
+        touchUi()
+        startCaptureOverlay()
+    }
+
+    private fun toggleRecordingPause() {
+        if (!recording) {
+            return
+        }
+        recordingPaused = !recordingPaused
+        val now = System.currentTimeMillis()
+        if (recordingPaused) {
+            recordingPausedAtMs = now
+        } else if (recordingPausedAtMs > 0L) {
+            recordingPausedAccumulatedMs += (now - recordingPausedAtMs).coerceAtLeast(0L)
+            recordingPausedAtMs = 0L
+        }
+        updateRecordingElapsed()
+        statusText = if (recordingPaused) {
+            "录制已暂停，已记录 $recordedStepCount 步"
+        } else {
+            "继续录制，已记录 $recordedStepCount 步"
+        }
+        touchUi()
+    }
+
+    private fun stopRecordingSessionAndPromptSave() {
+        if (panelMode != PanelMode.RECORDING) {
+            return
+        }
+        stopCaptureOverlay()
+        if (recordedGestures.isEmpty()) {
+            panelMode = PanelMode.NORMAL
+            stopRecordingTicker(resetElapsed = true)
+            statusText = "未录制到任何动作"
+            touchUi()
+            return
+        }
+        stopRecordingTicker(resetElapsed = false)
+        recordingSaveTaskName = buildDefaultRecordedTaskName()
+        recordingSaveDialogVisible = true
+        ensureSettingsOverlayView()
+        touchUi()
+    }
+
+    private fun discardRecordingSession(message: String) {
+        stopCaptureOverlay()
+        panelMode = PanelMode.NORMAL
+        recordingPaused = false
+        replayingGesture = false
+        recordingSaveDialogVisible = false
+        recordingSaveTaskName = ""
+        recordedGestures.clear()
+        recordedStepCount = 0
+        stopRecordingTicker(resetElapsed = true)
+        if (!settingsVisible) {
+            removeSettingsOverlay()
+        }
+        statusText = message
+        touchUi()
+    }
+
+    private fun confirmSaveRecordingSession() {
+        if (!recordingSaveDialogVisible || recordedGestures.isEmpty()) {
+            discardRecordingSession("未录制到任何动作")
+            return
+        }
+        val targetName = recordingSaveTaskName.trim().ifEmpty { buildDefaultRecordedTaskName() }
+        val gestures = recordedGestures.toList()
+        scope.launch {
+            val saved = withContext(Dispatchers.IO) {
+                val created = taskRepository.createTask(name = targetName, withTemplate = false)
+                var nextBundle = created.bundle
+                gestures.forEach { gesture ->
+                    nextBundle = appendRecordedGesture(nextBundle, gesture)
+                }
+                taskRepository.updateTaskBundle(created.taskId, nextBundle)
+            }
+            if (saved == null) {
+                statusText = "录制保存失败"
+                touchUi()
+                return@launch
+            }
+            selectedTaskId = saved.taskId
+            lastStartedTaskId = saved.taskId
+            persistIds()
+            loadTasks()
+            panelMode = PanelMode.NORMAL
+            recordingPaused = false
+            replayingGesture = false
+            recordingSaveDialogVisible = false
+            recordingSaveTaskName = ""
+            recordedGestures.clear()
+            recordedStepCount = 0
+            stopRecordingTicker(resetElapsed = true)
+            if (!settingsVisible) {
+                removeSettingsOverlay()
+            }
+            statusText = "已保存录制任务：${saved.name}"
+            touchUi()
+        }
+    }
+
     private fun startCaptureOverlay() {
         if (recording) {
             return
         }
-        if (selectedTaskId == null && tasks.isEmpty()) {
-            statusText = "暂无任务，无法录制"
-            touchUi()
-            return
-        }
         val hintView = FrameLayout(context).apply {
-            setBackgroundColor(Color.parseColor("#22000000"))
+            setBackgroundColor(Color.parseColor("#12000000"))
             isClickable = true
             isFocusable = true
         }
+        val trailView = RecordingTrailOverlayView(context)
+        hintView.addView(
+            trailView,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT,
+            ),
+        )
         val hintText = TextView(context).apply {
-            text = "录制中：点击记录单击，拖动记录轨迹，松手后自动保存"
+            text = "录制中：支持单指/多指、长按后拖动，松手后自动回放"
             setTextColor(Color.WHITE)
             setBackgroundColor(Color.parseColor("#CC000000"))
             setPadding(dp(12), dp(8), dp(12), dp(8))
@@ -1405,65 +1790,57 @@ class TaskControlPanelGlobalOverlay(
         }
 
         hintView.setOnTouchListener { _, event ->
+            val actionIndex = event.actionIndex.coerceAtLeast(0)
+            val (eventX, eventY) = eventPosition(event, actionIndex)
+            if (event.actionMasked == MotionEvent.ACTION_DOWN &&
+                isTouchWithinPanel(eventX, eventY) &&
+                activePointerTracks.isEmpty()
+            ) {
+                return@setOnTouchListener false
+            }
+            if (!recording || recordingPaused || replayingGesture) {
+                return@setOnTouchListener true
+            }
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    captureStartX = event.rawX
-                    captureStartY = event.rawY
-                    captureStartTime = event.eventTime
-                    capturePath.clear()
-                    capturePath += event.rawX to event.rawY
+                    resetCaptureGestureState()
+                    gestureSessionStartTimeMs = event.eventTime
+                    addPointerTrack(event, actionIndex, forceSample = true)
+                    true
+                }
+
+                MotionEvent.ACTION_POINTER_DOWN -> {
+                    addPointerTrack(event, actionIndex, forceSample = true)
                     true
                 }
 
                 MotionEvent.ACTION_MOVE -> {
-                    capturePath += event.rawX to event.rawY
+                    updatePointerTracks(event)
                     true
                 }
 
-                MotionEvent.ACTION_UP,
-                MotionEvent.ACTION_CANCEL,
-                -> {
-                    capturePath += event.rawX to event.rawY
-                    val duration = (event.eventTime - captureStartTime).coerceAtLeast(60L)
-                    val metrics = windowManager.currentWindowMetrics.bounds
-                    val width = metrics.width().coerceAtLeast(1)
-                    val height = metrics.height().coerceAtLeast(1)
-                    val endX = event.rawX
-                    val endY = event.rawY
-                    val distance = hypot(
-                        (endX - captureStartX).toDouble(),
-                        (endY - captureStartY).toDouble(),
-                    )
-                    val gesture = if (distance <= dp(18).toDouble()) {
-                        RecordedGesture.Click(
-                            xRatio = (captureStartX / width.toFloat()).coerceIn(0f, 1f).toDouble(),
-                            yRatio = (captureStartY / height.toFloat()).coerceIn(0f, 1f).toDouble(),
-                            durationMs = 60L,
-                        )
-                    } else {
-                        val points = capturePath
-                            .filterIndexed { index, _ ->
-                                index == 0 || index == capturePath.lastIndex || index % 2 == 0
-                            }
-                            .map { (x, y) ->
-                                (x / width.toFloat()).coerceIn(0f, 1f).toDouble() to
-                                    (y / height.toFloat()).coerceIn(0f, 1f).toDouble()
-                            }
-                            .distinct()
-                        RecordedGesture.Path(
-                            points = points.ifEmpty {
-                                listOf(
-                                    (captureStartX / width.toFloat()).coerceIn(0f, 1f).toDouble() to
-                                        (captureStartY / height.toFloat()).coerceIn(0f, 1f).toDouble(),
-                                    (endX / width.toFloat()).coerceIn(0f, 1f).toDouble() to
-                                        (endY / height.toFloat()).coerceIn(0f, 1f).toDouble(),
-                                )
-                            },
-                            durationMs = duration.coerceIn(120L, 2400L),
-                        )
+                MotionEvent.ACTION_POINTER_UP -> {
+                    liftPointerTrack(event, actionIndex)
+                    true
+                }
+
+                MotionEvent.ACTION_UP -> {
+                    liftPointerTrack(event, actionIndex)
+                    buildGestureFromTracks()?.let { gesture ->
+                        recordedGestures += gesture
+                        recordedStepCount = recordedGestures.size
+                        statusText = "已录制 $recordedStepCount 步，正在回放"
+                        touchUi()
+                        scope.launch {
+                            replayRecordedGesture(gesture)
+                        }
                     }
-                    stopCaptureOverlay()
-                    handleRecordedGesture(gesture)
+                    resetCaptureGestureState()
+                    true
+                }
+
+                MotionEvent.ACTION_CANCEL -> {
+                    resetCaptureGestureState()
                     true
                 }
 
@@ -1474,14 +1851,39 @@ class TaskControlPanelGlobalOverlay(
         runCatching {
             windowManager.addView(hintView, overlayParams)
             captureView = hintView
+            captureTrailView = trailView
+            captureLayoutParams = overlayParams
             recording = true
+            recordingPaused = false
+            resetCaptureGestureState()
+            panelNeedsEntryAnimation = false
+            panelMode = PanelMode.RECORDING
+            startRecordingTicker()
             statusText = "录制中，请在屏幕上执行手势"
             touchUi()
+            restackControlPanelAboveCapture()
         }.onFailure {
             Log.e(TAG, "add record overlay failed", it)
             recording = false
+            recordingPaused = false
+            panelMode = PanelMode.NORMAL
+            stopRecordingTicker(resetElapsed = true)
             statusText = "开启录制失败"
             touchUi()
+        }
+    }
+
+    private fun restackControlPanelAboveCapture() {
+        val panel = overlayView ?: return
+        val params = layoutParams ?: return
+        if (!panel.isAttachedToWindow) {
+            return
+        }
+        runCatching {
+            windowManager.removeView(panel)
+            windowManager.addView(panel, params)
+        }.onFailure {
+            Log.w(TAG, "restackControlPanelAboveCapture failed", it)
         }
     }
 
@@ -1490,36 +1892,332 @@ class TaskControlPanelGlobalOverlay(
             runCatching { windowManager.removeView(view) }
         }
         captureView = null
+        captureTrailView = null
+        captureLayoutParams = null
         recording = false
+        recordingPaused = false
+        resetCaptureGestureState()
         touchUi()
     }
 
-    private fun handleRecordedGesture(gesture: RecordedGesture) {
-        scope.launch {
-            val targetTaskId = selectedTaskId
-                ?: lastStartedTaskId
-                ?: tasks.firstOrNull()?.taskId
-            if (targetTaskId == null) {
-                statusText = "没有可保存的任务"
-                touchUi()
-                return@launch
+    private fun resetCaptureGestureState() {
+        activePointerTracks.clear()
+        completedPointerTracks.clear()
+        gestureSessionStartTimeMs = 0L
+        captureTrailView?.clearAll()
+    }
+
+    private fun eventPosition(event: MotionEvent, index: Int): Pair<Float, Float> {
+        return event.getX(index).coerceAtLeast(0f) to event.getY(index).coerceAtLeast(0f)
+    }
+
+    private fun addPointerTrack(
+        event: MotionEvent,
+        pointerIndex: Int,
+        forceSample: Boolean = false,
+    ) {
+        if (pointerIndex < 0 || pointerIndex >= event.pointerCount) {
+            return
+        }
+        val pointerId = event.getPointerId(pointerIndex)
+        val existing = activePointerTracks[pointerId]
+        val track = existing ?: PointerTrack(
+            pointerId = pointerId,
+            downTimeMs = event.eventTime,
+        ).also {
+            activePointerTracks[pointerId] = it
+            if (gestureSessionStartTimeMs <= 0L) {
+                gestureSessionStartTimeMs = event.eventTime
             }
-            val updated = withContext(Dispatchers.IO) {
-                val record = taskRepository.getTask(targetTaskId) ?: return@withContext null
-                val nextBundle = appendRecordedGesture(record.bundle, gesture)
-                taskRepository.updateTaskBundle(targetTaskId, nextBundle)
+        }
+        val (x, y) = eventPosition(event, pointerIndex)
+        appendTrackSample(track, x, y, event.eventTime, force = forceSample)
+        if (existing == null) {
+            captureTrailView?.onPointerDown(pointerId, x, y)
+        }
+    }
+
+    private fun updatePointerTracks(event: MotionEvent) {
+        for (index in 0 until event.pointerCount) {
+            val pointerId = event.getPointerId(index)
+            val track = activePointerTracks[pointerId] ?: continue
+            val (x, y) = eventPosition(event, index)
+            appendTrackSample(track, x, y, event.eventTime, force = false)
+            captureTrailView?.onPointerMove(pointerId, x, y)
+        }
+    }
+
+    private fun liftPointerTrack(event: MotionEvent, pointerIndex: Int) {
+        if (pointerIndex < 0 || pointerIndex >= event.pointerCount) {
+            return
+        }
+        val pointerId = event.getPointerId(pointerIndex)
+        val track = activePointerTracks.remove(pointerId) ?: return
+        val (x, y) = eventPosition(event, pointerIndex)
+        appendTrackSample(track, x, y, event.eventTime, force = true)
+        track.upTimeMs = event.eventTime
+        completedPointerTracks += track
+        captureTrailView?.onPointerUp(pointerId, x, y)
+    }
+
+    private fun appendTrackSample(
+        track: PointerTrack,
+        x: Float,
+        y: Float,
+        eventTimeMs: Long,
+        force: Boolean,
+    ) {
+        val lastIndex = track.points.lastIndex
+        if (!force && lastIndex >= 0) {
+            val lastTime = track.timestampsMs[lastIndex]
+            if (eventTimeMs == lastTime) {
+                val (lastX, lastY) = track.points[lastIndex]
+                val isSamePoint = hypot(
+                    (x - lastX).toDouble(),
+                    (y - lastY).toDouble(),
+                ) < 0.5
+                if (isSamePoint) {
+                    return
+                }
             }
-            if (updated == null) {
-                statusText = "录制保存失败"
-                touchUi()
-                return@launch
+        }
+        track.points += x to y
+        track.timestampsMs += eventTimeMs
+        track.upTimeMs = eventTimeMs
+    }
+
+    private fun buildGestureFromTracks(): RecordedGesture? {
+        val tracks = completedPointerTracks
+            .ifEmpty { activePointerTracks.values.toList() }
+            .filter { it.points.isNotEmpty() }
+            .sortedBy { it.downTimeMs }
+        if (tracks.isEmpty()) {
+            return null
+        }
+        val metrics = windowManager.currentWindowMetrics.bounds
+        val width = metrics.width().coerceAtLeast(1)
+        val height = metrics.height().coerceAtLeast(1)
+        val sessionStart = gestureSessionStartTimeMs
+            .takeIf { it > 0L }
+            ?: tracks.minOf { it.downTimeMs }
+        tracks.forEachIndexed { index, track ->
+            val firstTs = track.timestampsMs.firstOrNull() ?: track.downTimeMs
+            val lastTs = track.timestampsMs.lastOrNull() ?: track.upTimeMs
+            val rawDuration = (track.upTimeMs - track.downTimeMs).coerceAtLeast(0L)
+            val tsDuration = (lastTs - firstTs).coerceAtLeast(0L)
+            Log.d(
+                TAG,
+                "record track[$index] pointer=${track.pointerId} points=${track.points.size} rawDuration=${rawDuration}ms tsDuration=${tsDuration}ms down=${track.downTimeMs} up=${track.upTimeMs}",
+            )
+        }
+        val normalizedStrokes = tracks.mapNotNull { track ->
+            toRecordedStroke(
+                track = track,
+                sessionStartMs = sessionStart,
+                width = width,
+                height = height,
+            )
+        }
+        if (normalizedStrokes.isEmpty()) {
+            return null
+        }
+        normalizedStrokes.forEachIndexed { index, stroke ->
+            val tsLast = stroke.timestampsMs.lastOrNull() ?: 0L
+            Log.d(
+                TAG,
+                "record stroke[$index] points=${stroke.points.size} startDelay=${stroke.startDelayMs}ms duration=${stroke.durationMs}ms tsLast=${tsLast}ms",
+            )
+        }
+        if (normalizedStrokes.size == 1 && isClickStroke(normalizedStrokes.first())) {
+            val stroke = normalizedStrokes.first()
+            val firstPoint = stroke.points.firstOrNull() ?: return null
+            Log.d(
+                TAG,
+                "record gesture=click duration=${stroke.durationMs}ms",
+            )
+            return RecordedGesture.Click(
+                xRatio = firstPoint.first,
+                yRatio = firstPoint.second,
+                durationMs = stroke.durationMs.coerceIn(50L, 2000L),
+            )
+        }
+        val totalDuration = normalizedStrokes.maxOfOrNull { it.startDelayMs + it.durationMs } ?: 300L
+        val pauseHints = normalizedStrokes.sumOf { stroke ->
+            val ts = stroke.timestampsMs
+            if (ts.size < 2) {
+                0
+            } else {
+                var pauses = 0
+                for (i in 1 until ts.size) {
+                    if ((ts[i] - ts[i - 1]) >= 300L) {
+                        pauses++
+                    }
+                }
+                pauses
             }
-            selectedTaskId = updated.taskId
-            persistIds()
-            loadTasks()
-            statusText = "已录制并保存到: ${updated.name}"
+        }
+        Log.d(
+            TAG,
+            "record gesture=multi strokes=${normalizedStrokes.size} totalDuration=${totalDuration}ms pauseHints=$pauseHints",
+        )
+        return RecordedGesture.MultiPath(
+            strokes = normalizedStrokes,
+            durationMs = totalDuration.coerceIn(120L, 60_000L),
+        )
+    }
+
+    private suspend fun replayRecordedGesture(gesture: RecordedGesture) {
+        if (replayingGesture) {
+            return
+        }
+        replayingGesture = true
+        when (gesture) {
+            is RecordedGesture.Click -> {
+                Log.d(
+                    TAG,
+                    "replay start click duration=${gesture.durationMs}ms at=(${gesture.xRatio},${gesture.yRatio})",
+                )
+            }
+
+            is RecordedGesture.MultiPath -> {
+                val minStart = gesture.strokes.minOfOrNull { it.startDelayMs } ?: 0L
+                val maxStart = gesture.strokes.maxOfOrNull { it.startDelayMs } ?: 0L
+                Log.d(
+                    TAG,
+                    "replay start multi strokes=${gesture.strokes.size} totalDuration=${gesture.durationMs}ms startSpread=${maxStart - minStart}ms",
+                )
+                gesture.strokes.forEachIndexed { index, stroke ->
+                    val tsLast = stroke.timestampsMs.lastOrNull() ?: 0L
+                    val absStart = stroke.startDelayMs
+                    val absEnd = stroke.startDelayMs + stroke.durationMs
+                    Log.d(
+                        TAG,
+                        "replay stroke[$index] points=${stroke.points.size} startDelay=${stroke.startDelayMs}ms duration=${stroke.durationMs}ms tsLast=${tsLast}ms abs=[$absStart,$absEnd]",
+                    )
+                }
+            }
+        }
+        val panel = overlayView
+        val capture = captureView
+        panel?.visibility = View.INVISIBLE
+        capture?.visibility = View.INVISIBLE
+        setCaptureTouchEnabled(enabled = false)
+        try {
+            delay(80)
+            val success = when (gesture) {
+                is RecordedGesture.Click -> AccessibilityGestureExecutor.performClick(
+                    xRatio = gesture.xRatio,
+                    yRatio = gesture.yRatio,
+                    durationMs = gesture.durationMs.coerceAtLeast(40L),
+                )
+
+                is RecordedGesture.MultiPath -> AccessibilityGestureExecutor.performRecordStrokes(
+                    strokes = gesture.strokes.map { stroke ->
+                        AccessibilityGestureExecutor.GestureStroke(
+                            points = stroke.points,
+                            timestampsMs = stroke.timestampsMs,
+                            startDelayMs = stroke.startDelayMs,
+                            durationMs = stroke.durationMs,
+                        )
+                    },
+                )
+            }
+            delay(100)
+            val gestureStats = TaskAccessibilityService.gestureStatsText()
+            Log.d(TAG, "replay result success=$success stats=$gestureStats")
+            statusText = if (success) {
+                "回放完成，已录制 $recordedStepCount 步"
+            } else {
+                "回放失败，已录制 $recordedStepCount 步"
+            }
+        } finally {
+            setCaptureTouchEnabled(enabled = true)
+            capture?.visibility = View.VISIBLE
+            panel?.visibility = View.VISIBLE
+            replayingGesture = false
             touchUi()
         }
+    }
+
+    private fun setCaptureTouchEnabled(enabled: Boolean) {
+        val view = captureView ?: return
+        val params = captureLayoutParams ?: return
+        val nextFlags = if (enabled) {
+            params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+        } else {
+            params.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        }
+        if (params.flags == nextFlags) {
+            return
+        }
+        params.flags = nextFlags
+        runCatching {
+            windowManager.updateViewLayout(view, params)
+        }.onFailure {
+            Log.w(TAG, "setCaptureTouchEnabled failed: enabled=$enabled", it)
+        }
+    }
+
+    private fun toRecordedStroke(
+        track: PointerTrack,
+        sessionStartMs: Long,
+        width: Int,
+        height: Int,
+    ): RecordedStroke? {
+        val allPoints = track.points
+        val allTimestamps = track.timestampsMs
+        if (allPoints.isEmpty() || allTimestamps.isEmpty() || allPoints.size != allTimestamps.size) {
+            return null
+        }
+        val points = allPoints.toMutableList()
+        val timestamps = allTimestamps.toMutableList()
+        if (points.size == 1) {
+            points += points.first()
+            timestamps += (timestamps.first() + 1L)
+        }
+        val start = track.downTimeMs
+        val duration = (track.upTimeMs - start).coerceAtLeast(1L)
+        return RecordedStroke(
+            points = points.map { (x, y) ->
+                (x / width.toFloat()).coerceIn(0f, 1f).toDouble() to
+                    (y / height.toFloat()).coerceIn(0f, 1f).toDouble()
+            },
+            timestampsMs = timestamps.map { (it - start).coerceAtLeast(0L) },
+            startDelayMs = (start - sessionStartMs).coerceAtLeast(0L),
+            durationMs = duration,
+        )
+    }
+
+    private fun isClickStroke(stroke: RecordedStroke): Boolean {
+        val points = stroke.points
+        if (points.isEmpty()) {
+            return false
+        }
+        val first = points.first()
+        val last = points.last()
+        val distance = hypot(
+            (last.first - first.first).toDouble(),
+            (last.second - first.second).toDouble(),
+        )
+        val bounds = windowManager.currentWindowMetrics.bounds
+        val baseSize = minOf(bounds.width(), bounds.height()).coerceAtLeast(1)
+        val clickDistanceRatio = dp(18).toDouble() / baseSize.toDouble()
+        return distance <= clickDistanceRatio
+    }
+
+    private fun isTouchWithinPanel(rawX: Float, rawY: Float): Boolean {
+        val panelWidth = (overlayView?.width ?: dp(188)).coerceAtLeast(1)
+        val panelHeight = (overlayView?.height ?: dp(72)).coerceAtLeast(1)
+        val left = panelOffsetX
+        val top = panelOffsetY
+        val right = left + panelWidth
+        val bottom = top + panelHeight
+        return rawX >= left && rawX <= right && rawY >= top && rawY <= bottom
+    }
+
+    private fun buildDefaultRecordedTaskName(): String {
+        val formatter = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+        return "录制任务 ${formatter.format(Date())}"
     }
 
     private fun appendRecordedGesture(
@@ -1554,16 +2252,23 @@ class TaskControlPanelGlobalOverlay(
                 ),
             )
 
-            is RecordedGesture.Path -> FlowNode(
+            is RecordedGesture.MultiPath -> FlowNode(
                 nodeId = nodeId,
                 kind = NodeKind.ACTION,
                 actionType = ActionType.RECORD,
                 pluginId = "builtin.basic_gesture",
                 params = mapOf(
-                    "points" to gesture.points.map { (x, y) ->
+                    "points" to gesture.strokes.firstOrNull()?.points?.map { (x, y) ->
+                        mapOf("x" to x, "y" to y)
+                    }.orEmpty(),
+                    "strokes" to gesture.strokes.map { stroke ->
                         mapOf(
-                            "x" to x,
-                            "y" to y,
+                            "points" to stroke.points.map { (x, y) ->
+                                mapOf("x" to x, "y" to y)
+                            },
+                            "timestampsMs" to stroke.timestampsMs,
+                            "startDelayMs" to stroke.startDelayMs,
+                            "durationMs" to stroke.durationMs,
                         )
                     },
                     "durationMs" to gesture.durationMs,
@@ -1606,6 +2311,100 @@ class TaskControlPanelGlobalOverlay(
 
     private fun dp(value: Int): Int {
         return (value * context.resources.displayMetrics.density).roundToInt()
+    }
+}
+
+private class RecordingTrailOverlayView(
+    context: Context,
+) : View(context) {
+    private data class CompletedTrail(
+        val path: Path,
+        val createdAtMs: Long,
+    )
+
+    private val activePaths = linkedMapOf<Int, Path>()
+    private val activePoints = linkedMapOf<Int, Pair<Float, Float>>()
+    private val completedTrails = mutableListOf<CompletedTrail>()
+    private val trailFadeMs = 260L
+
+    private val linePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#33FF6D00")
+        style = Paint.Style.STROKE
+        strokeWidth = 8f
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+    }
+    private val corePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#88FFA000")
+        style = Paint.Style.FILL
+    }
+    private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#66FFFFFF")
+        style = Paint.Style.STROKE
+        strokeWidth = 3f
+    }
+
+    fun onPointerDown(pointerId: Int, x: Float, y: Float) {
+        val path = Path().apply { moveTo(x, y) }
+        activePaths[pointerId] = path
+        activePoints[pointerId] = x to y
+        invalidate()
+    }
+
+    fun onPointerMove(pointerId: Int, x: Float, y: Float) {
+        val path = activePaths[pointerId] ?: return
+        path.lineTo(x, y)
+        activePoints[pointerId] = x to y
+        invalidate()
+    }
+
+    fun onPointerUp(pointerId: Int, x: Float, y: Float) {
+        val path = activePaths.remove(pointerId) ?: return
+        path.lineTo(x, y)
+        activePoints.remove(pointerId)
+        completedTrails += CompletedTrail(
+            path = Path(path),
+            createdAtMs = SystemClock.uptimeMillis(),
+        )
+        invalidate()
+    }
+
+    fun clearAll() {
+        activePaths.clear()
+        activePoints.clear()
+        completedTrails.clear()
+        invalidate()
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        val now = SystemClock.uptimeMillis()
+        val iterator = completedTrails.iterator()
+        while (iterator.hasNext()) {
+            val trail = iterator.next()
+            val elapsed = now - trail.createdAtMs
+            if (elapsed >= trailFadeMs) {
+                iterator.remove()
+                continue
+            }
+            val alpha = ((1f - elapsed.toFloat() / trailFadeMs.toFloat()) * 255f).toInt().coerceIn(0, 255)
+            val oldLineAlpha = linePaint.alpha
+            linePaint.alpha = alpha
+            canvas.drawPath(trail.path, linePaint)
+            linePaint.alpha = oldLineAlpha
+        }
+
+        activePaths.values.forEach { path ->
+            canvas.drawPath(path, linePaint)
+        }
+        activePoints.values.forEach { (x, y) ->
+            canvas.drawCircle(x, y, 14f, corePaint)
+            canvas.drawCircle(x, y, 20f, ringPaint)
+        }
+
+        if (completedTrails.isNotEmpty()) {
+            postInvalidateOnAnimation()
+        }
     }
 }
 

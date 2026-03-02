@@ -11,6 +11,13 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 
 class TaskAccessibilityService : AccessibilityService() {
+    data class FeedbackStroke(
+        val points: List<PointF>,
+        val startDelayMs: Long,
+        val durationMs: Long,
+        val timestampsMs: List<Long> = emptyList(),
+    )
+
     companion object {
         @Volatile
         var instance: TaskAccessibilityService? = null
@@ -72,7 +79,6 @@ class TaskAccessibilityService : AccessibilityService() {
         }
         // Phase 1 先仅建立服务骨架，后续接入动作执行能力。
         eventCounter.incrementAndGet()
-        Log.d("TaskAccessibility", "eventType=${event.eventType}")
     }
 
     override fun onInterrupt() {
@@ -99,21 +105,54 @@ class TaskAccessibilityService : AccessibilityService() {
     private var taskEditorGlobalOverlay: TaskEditorGlobalOverlay? = null
     private var taskControlPanelGlobalOverlay: TaskControlPanelGlobalOverlay? = null
 
-    fun showClickFeedback(x: Float, y: Float) {
-        gestureFeedbackOverlay?.showClick(x = x, y = y)
+    fun showClickFeedback(x: Float, y: Float, durationMs: Long) {
+        gestureFeedbackOverlay?.showClick(
+            x = x,
+            y = y,
+            durationMs = durationMs,
+        )
     }
 
-    fun showSwipeFeedback(startX: Float, startY: Float, endX: Float, endY: Float) {
+    fun showSwipeFeedback(
+        startX: Float,
+        startY: Float,
+        endX: Float,
+        endY: Float,
+        durationMs: Long,
+    ) {
         gestureFeedbackOverlay?.showSwipe(
             startX = startX,
             startY = startY,
             endX = endX,
             endY = endY,
+            durationMs = durationMs,
         )
     }
 
-    fun showPathFeedback(points: List<PointF>) {
-        gestureFeedbackOverlay?.showPath(points = points)
+    fun showPathFeedback(points: List<PointF>, durationMs: Long) {
+        gestureFeedbackOverlay?.showPath(
+            points = points,
+            durationMs = durationMs,
+        )
+    }
+
+    fun showStrokesFeedback(
+        strokes: List<FeedbackStroke>,
+        totalDurationMs: Long,
+        traceId: String? = null,
+    ) {
+        gestureFeedbackOverlay?.showStrokes(
+            strokes = strokes.map {
+                GestureFeedbackOverlay.Stroke(
+                    points = it.points,
+                    startDelayMs = it.startDelayMs,
+                    durationMs = it.durationMs,
+                    timestampsMs = it.timestampsMs,
+                )
+            },
+            totalDurationMs = totalDurationMs,
+            traceId = traceId,
+        )
     }
 
     fun showTaskEditorOverlay(taskId: String): Boolean {

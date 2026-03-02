@@ -181,13 +181,109 @@
 112. 修复“2->3 时第二层往上顶一下”：第二层 top inset 切换改为 `animateDpAsState + spring` 平滑过渡，消除位置瞬时跳变。
 113. `OverlayStackMotion` 参数命名清理：移除 `THIRD_*`/`SECOND_*` 旧命名，改为“两层可见堆叠”语义（`PREVIOUS_LAYER_* / FOREGROUND_LAYER_* / BACKGROUND_LAYER_*`），与当前可见层策略一致。
 114. 修复打开第 3 级页面崩溃（`Padding must be non-negative`）：对 `actionTopInset` 应用 `coerceAtLeast(0.dp)` 防护，避免 spring 回弹瞬时负值触发非法 padding。
+115. 操作面板录制能力升级为“会话模式”：`录制 -> 暂停/继续 -> 停止`，支持一次录制中连续采集多步手势（点击/轨迹），不再“单次手势即自动落库”。
+116. 录制停止后新增保存弹窗（全局浮窗内）：可输入任务名，支持“保存为新任务”或“丢弃”；保存逻辑改为新建空任务并按录制顺序追加动作节点。
+117. 任务参数持久化升级为递归结构：`TaskRepository` 的 `params` 编解码支持 `Map/List/Number/Boolean/String`，修复录制轨迹点位被序列化成字符串后无法正确回放的问题。
+118. 录制采集新增“逐步回放确认”：每次手势采集完成后，临时隐藏录制面板与录制浮层，立即执行一次真实手势回放（复用轨迹反馈层），完成后恢复录制界面继续采集。
+119. 录制层级修正：录制浮层改为不覆盖面板视觉区域，并在面板区域透传触摸，保证录制态可随时操作暂停/停止。
+120. 录制面板状态切换动画补齐：`NORMAL <-> RECORDING` 增加宽度弹簧过渡与内容 Crossfade，避免状态切换生硬。
+121. 录制回放滑动无效修复：回放前将录制浮层临时切换为 `FLAG_NOT_TOUCHABLE` 并延迟一帧执行手势，回放后恢复可触摸，解决“录制态回放不生效但任务执行生效”的不一致。
+122. 手势轨迹反馈升级为进度动画：`click/swipe/path` 从静态一次性绘制改为按时长逐步绘制（含动态终点），更接近 liteclicker 的视觉反馈语义。
+123. 录制面板交互收敛：录制态移除“关闭按钮”，仅保留“暂停/停止”；退出录制统一走“停止”，若未录制任何动作则直接恢复普通面板，不弹保存弹窗。
+124. 录制面板新增时长计时：右上角实时显示当前录制持续时间（暂停期间不计时）。
+125. 修复录制态切换动画闪烁：移除录制开始时对面板窗口的 `remove/addView` 提层重挂，避免 `NORMAL -> RECORDING` 动画中途被窗口重建打断。
+126. 轨迹反馈时长对齐：`AccessibilityGestureExecutor` 将 click/swipe/path 的反馈 `duration` 与实际 `dispatchGesture` 使用的 `duration` 统一，修复“轨迹动画快慢与真实执行不一致”。
+127. 录制层级与交互可用性修正：录制浮层 add 完成后立即重排窗口顺序（将控制面板重新 add 到最上层），并在叠层完成后切换到录制态动画，恢复录制态下“拖动面板/暂停/停止”可操作性。
+128. 录制浮层视觉改为轻量半透明（不再全透明）：录制层背景改为 `#12000000`，保留录制态可感知遮罩，同时不干扰目标界面操作观察。
+129. 录制面板切换提速：`NORMAL <-> RECORDING` 的宽度与内容切换改为中等刚度弹簧 + 120ms Crossfade，显著减少“状态切换过慢”体感。
+130. 录制采集模型升级为 pointer track：按 `pointerId` 记录 `points/timestamps/down/up`，替换旧单指 `capturePath`，支持多指并发轨迹与“长按后拖动”采样。
+131. `record` 执行协议升级：新增 `strokes` 参数结构（`points + timestampsMs + startDelayMs + durationMs`），运行时优先执行 `strokes` 并向后兼容旧 `points`。
+132. 多轨迹反馈升级：反馈层新增 `MULTI_PATH`，按每条 stroke 的起始延迟与时长逐步绘制，录制回放可视化与真实执行时序一致。
+133. 本轮可交付性校验通过：`compileDebugKotlin`、`assembleDebug`、`testDebugUnitTest` 全部成功。
+134. 录制面板高度切换动画收敛：面板容器从弹簧自适应高度改为固定时长 `animateContentSize(tween 170ms)`，修复“展开慢、收起快”的非对称观感。
+135. 长按后拖动回放修复（参考 liteclicker 的时间段思路）：对“单指 + timestamps”手势在 Android O+ 改为 `continueStroke` 分段回放（停顿段+移动段），不再只依赖单条 path 的长度近似。
+136. 长时录制回放稳定性修复：手势分发等待超时由固定 2.5s 改为按手势时长动态计算（`duration + buffer`），避免长按/长轨迹被误判为 timeout。
+137. 回归验证通过：本轮修复后再次通过 `compileDebugKotlin`、`testDebugUnitTest`、`assembleDebug`。
+138. 录制面板转场进一步收敛为“纯渐隐”：移除录制态切换时的宽高动画，保留不同状态面板尺寸但改为瞬时切换，内容仅通过 Crossfade 过渡，消除“展开慢收起快”的尺寸形变观感。
+139. 录制层级切换时序修正：按“先提层（panel re-stack）再触发录制态动画”执行，避免 `remove/addView` 打断转场并导致“切换无动画”。
+140. 录制实时触摸轨迹可视化：录制浮层新增 `RecordingTrailOverlayView`，在录制过程中实时绘制手指轨迹与触点（含多指并发、抬手短暂淡出），提升录制反馈可见性。
+141. 录制轨迹与回放轨迹配色区分：录制触摸轨迹采用青色系（`#00B8FF/#00C2FF`），回放继续沿用橙色系，避免“用户触摸”和“自动回放”视觉混淆。
+142. 稳定性验证：新增录制实时轨迹层后再次通过 `compileDebugKotlin`、`testDebugUnitTest`、`assembleDebug`。
+143. 轨迹配色按交互反馈收敛：录制实时轨迹调整为“回放同色系但更高透明度”（橙色系低 alpha），在统一视觉语言下保留录制/回放可辨识度。
+144. 回放轨迹时序对齐修复：多 stroke 反馈从“按点数等速推进”改为“按 `timestampsMs` 时间轴推进”，解决“轨迹先跑完但手势还在执行”的速度错位。
+145. 面板高度包裹修复：移除面板最小高度硬编码，恢复按内容自适应高度，修复录制态和普通态底部多余留白。
+146. 回归验证：以上修复后再次通过 `compileDebugKotlin`、`testDebugUnitTest`、`assembleDebug`。
+147. 长按分段回放场景下的轨迹节奏补偿：针对 `continueStroke` 多段执行的回调开销，对反馈时长增加按段数的补偿时间，进一步收敛“轨迹先走完”的体感偏差。
+148. 轨迹节奏补偿参数回调：将分段补偿从 `22ms/段` 下调至 `10ms/段`，修正“补偿后轨迹反而慢于实际手势”的问题。
+149. 面板闪烁治理（重挂场景）：主面板 `ComposeView` 改为 `DisposeOnViewTreeLifecycleDestroyed`，并移除 re-stack 的冗余 `updateViewLayout`，降低“普通态切录制态”时的窗口重挂闪烁。
+150. 稳定性验证：以上修复后再次通过 `compileDebugKotlin`、`testDebugUnitTest`、`assembleDebug`。
+151. 轨迹时序再次收敛：移除单指分段回放反馈时长的“按段补偿”逻辑，反馈总时长回归录制原始 `duration/timestamps`，避免时间轴被拉长导致“轨迹比实际慢”。
+152. 录制面板切换闪烁修复：录制启动时将 `panelMode=RECORDING` 与状态文案切换提前到窗口重排前，移除 `post` 延迟切换，解决“播放/关闭按钮残留一拍再消失”。
+153. 转场细节微调与验证：面板模式内容切换时长从 `120ms` 收敛到 `80ms`，并完成 `compileDebugKotlin`、`testDebugUnitTest`、`assembleDebug` 全量校验。
+154. 回放实际执行慢定位与修复：确认慢点在 `dispatchTimedStroke` 实际分发链路（非轨迹动画），原实现按采样点逐段 `continueStroke` 导致段间回调开销叠加，改为“连续移动段合并分发，仅在停顿边界拆段”。
+155. 回放诊断日志补齐：为 timed 回放新增 `expected(ms) vs actual(ms)` 打点（含分段数），用于后续机型侧校准与阈值调优。
+156. 稳定性验证：本轮“分段合并”优化后再次通过 `compileDebugKotlin`、`testDebugUnitTest`、`assembleDebug`。
+157. 长按停顿识别升级：`buildTimedSegments` 从“单步阈值拆段”改为“静止 run 检测 + 最小时长判定（350ms）”，并以 `pause radius=20px` 识别长按区间，修复“长按后移动被当成连续移动导致停留不足”。
+158. 分段模型收敛：新增 `PrimitiveTimedRun`，将短静止并入移动段，只有满足阈值的静止段才生成为 `pause`；同时保留移动段合并策略，兼顾停顿准确性与执行性能。
+159. 稳定性验证：以上修复后再次通过 `compileDebugKotlin`、`testDebugUnitTest`、`assembleDebug`。
+160. 按 `liteclicker` 方案重写单指时间戳回放分段：`dispatchTimedStroke` 改为 `FunctionManager` 同款段落模型（`startIndex/endIndex/duration/isPause`）与 `continueStroke` 链式执行，保留 pause 段 `+1px` 语义。
+161. 停顿判定改为 `liteclicker` 同款归一化阈值：`maxPauseMove=0.02`、`pauseEntryMove=0.01`、`minPauseDuration=350ms`，停顿与移动段拆分逻辑改为状态机实现。
+162. 回放动画同步对齐 `liteclicker`：轨迹时间轴改为“按 timestamp 跨点推进（无段内插值）”，与原项目 `MultiSwipeDisplayView` 行为一致。
+163. 稳定性验证：以上重构后再次通过 `compileDebugKotlin`、`testDebugUnitTest`、`assembleDebug`。
+164. 说明：157/158 的中间方案已废弃，当前生效实现以 160-162 为准。
+165. 录制采样策略对齐 `liteclicker`：移除录制轨迹的点位抽样/去抖（仅过滤同事件同坐标重复点），`ACTION_MOVE` 采样尽量全量保留，避免长按阶段微抖动点被吞掉后导致 pause 时长被低估。
+166. 录制序列保真度提升：`toRecordedStroke` 取消二次 downsample，直接持久化原始 `points/timestamps`（单点补齐仍保留），确保停顿判定和回放时序基于完整录制数据。
+167. 稳定性验证：以上修复后再次通过 `compileDebugKotlin`、`testDebugUnitTest`、`assembleDebug`。
+168. 长按时序保真修复：录制态新增 `32ms` 周期 hold 采样器，对活跃指针持续补点（复用当前位置+新时间戳），解决“系统未派发静止 MOVE 导致长按秒数被压短”的问题。
+169. 录制采样器生命周期接入：录制开始启动、录制结束自动取消，避免非录制态额外采样。
+170. 稳定性验证：以上修复后再次通过 `compileDebugKotlin`、`testDebugUnitTest`、`assembleDebug`。
+171. 新增端到端诊断日志（录制/回放）：记录 `track -> stroke -> replay` 三阶段关键时序（点数、duration、timestamps 末值、pause hints），用于定位“录制 5s 长按回放不足”。
+172. 新增执行器分段诊断：`performRecordStrokes/buildTimedSegments/dispatchTimedStroke` 输出输入 stroke 摘要、分段结构（pause/move、index、duration）及 `expected vs actual` 执行耗时。
+173. 稳定性验证：以上日志增强后再次通过 `compileDebugKotlin`、`testDebugUnitTest`、`assembleDebug`。
+174. 基于实测日志定位到 pause 段被系统提前完成：案例中 `expected=4732ms`、`actual=1830ms`，长按段 `4262ms` 未被完整执行。
+175. 新增长按段执行兼容：`dispatchTimedStroke` 的 pause 段从“单条 1px 线”改为“微小环形轨迹 + 1px 收尾”，提升系统对长时 pause duration 的遵循度（同 pre-O `addStrokeWithHold` 思路）。
+176. 稳定性验证：以上兼容修复后再次通过 `compileDebugKotlin`、`testDebugUnitTest`、`assembleDebug`。
+177. 按需求回归 `liteclicker` 逻辑：移除录制态 `32ms` 周期 hold 采样器，不再主动补充静止点时间戳。
+178. 按需求回归 `liteclicker` 逻辑：pause 段执行从“微环轨迹”恢复为 `+1px` 单段语义，保持与 `FunctionManager.executeGestureSegments` 一致。
+179. 稳定性验证：以上回归后再次通过 `compileDebugKotlin`、`testDebugUnitTest`、`assembleDebug`。
+180. 针对实机“长按段被提前完成”增加兼容分支：单指时间戳手势若检测到有效长按段（`>=350ms`），回放从 `timed_continueStroke` 自动切到 `legacy_hold_path`（单条带停顿路径 + 固定总时长），避免 ROM 对 pause 段 duration 的提前截断。
+181. 诊断日志新增模式标识：`performRecordStrokes singleStroke mode=timed_continueStroke|legacy_hold_path`，便于区分当前走的是标准分段链还是兼容分支。
+182. 稳定性验证：以上兼容分支后再次通过 `compileDebugKotlin`、`testDebugUnitTest`、`assembleDebug`。
+183. 按最新实机反馈回退兼容分支：移除 `legacy_hold_path` 自动切换，恢复单指时间戳手势统一走 `timed_continueStroke`。
+184. 按最新实机反馈恢复 pause 段“原地微动”实现：`dispatchTimedStroke` pause 段重新启用微环轨迹 + 1px 收尾，以保障长按体感时长。
+185. 稳定性验证：以上回退后再次通过 `compileDebugKotlin`、`testDebugUnitTest`、`assembleDebug`。
+186. 多指长按回放修复：新增 `dispatchTimedMultiStroke`，对“多 stroke + timestamps”在 Android O+ 采用统一时间边界分段，并在每个时间片内同步构建所有活跃指针的 `continueStroke`，避免旧方案因单条 path 等速导致长按时长被压缩。
+187. 多指时间片执行新增日志：输出 `timed multi stroke done intervals/expected/actual/strokes`，用于后续机型侧比对“预期时长 vs 实际分发时长”。
+188. 文档收敛：`task_list_mvp_v1` 同步更新为“单指/多指时间戳手势均走 timed 分段回放；pause 段使用微环 + 1px 收尾；不再使用 `legacy_hold_path`”。
+189. 稳定性验证：本轮多指时序修复后再次通过 `compileDebugKotlin`、`testDebugUnitTest`、`assembleDebug`。
+190. 修复“错峰多指（先按第一指，再按第二指）回放被取消”：多指 timed 分段模式新增起点对齐约束（`startDelay` 差值 <= `24ms` 才启用），错峰多指自动回退到单次 multi-stroke 分发，避免 `continueStroke` 中途引入新指针导致整段手势被系统取消。
+191. 多指回放日志补充模式识别：`multiStroke mode=timed_multi_continueStroke|single_dispatch_paths aligned=...`，用于快速区分当前是否走错峰回退路径。
+192. 稳定性验证：以上修复后再次通过 `compileDebugKotlin`、`testDebugUnitTest`、`assembleDebug`。
+193. 新增双指回放失败诊断日志（执行器级）：`dispatchGestureRaw` 增加 `dispatch start/completed/cancelled/failed` 全链路日志，包含 `tag/timeout/strokeCount/elapsed/detail`，用于区分 `cancelled`、`timeout`、`dispatch_returned_false`。
+194. 新增分段失败上下文透传：`dispatchTimedStroke` 与 `dispatchTimedMultiStroke` 失败时附带 `index/start/end/duration/active/reason` 到 detail，便于直接定位失败区间与失败模式。
+195. 新增回放入口日志（控制面板级）：多指回放开始日志补充 `startSpread` 与每条 stroke 的绝对时间区间 `abs=[start,end]`；回放结束日志附带 `TaskAccessibilityService.gestureStatsText()`。
+196. 稳定性验证：以上日志增强后再次通过 `compileDebugKotlin`、`testDebugUnitTest`、`assembleDebug`。
+197. 基于实测日志定位本轮失败根因：样例 `startSpread=15ms`，`record_timed_multi_seg_1`（从单指切到双指）在 `8ms` 即 `cancelled`，证明错峰起点在 timed multi 分段链中途引入新指针会触发系统取消。
+198. 多指 timed 启用条件再次收紧：`MULTI_TIMED_START_ALIGNMENT_TOLERANCE_MS` 从 `24ms` 调整为 `0ms`，仅完全同起点才走 timed multi；任何错峰起点都回退 `single_dispatch_paths`，优先稳定性。
+199. 多指模式日志补充 `startSpread`，用于确认是否命中“错峰回退”分支。
+200. 稳定性验证：以上收敛后再次通过 `compileDebugKotlin`、`testDebugUnitTest`、`assembleDebug`。
+201. 修复错峰多指回退路径“长按时长不足”问题：`buildStrokePath` 的长按段改为“按时间加权路径长度”生成（基于移动段参考速度估算目标路径长度），不再使用固定 `delta/step` 步数，避免长按在单次分发中被路径等速压缩。
+202. 长按微动建模参数升级：引入 `HOLD_WIGGLE_STEPS_PER_LOOP/MAX_STEPS/BASE_SPEED/MIN_SPEED/MAX_SPEED/PATH_SPEED_SCALE`，并将长按目标路径长度最小值收敛为 `24px`，兼顾长按时长保真与路径规模可控。
+203. 稳定性验证：以上修复后再次通过 `compileDebugKotlin`、`testDebugUnitTest`、`assembleDebug`。
+204. 新增“动画 vs 执行”统一追踪链路：`performRecordStrokes` 生成 `traceId`（`record-<uptime>`），并透传到反馈层与执行层日志，统一关联一次回放会话。
+205. 反馈层新增里程碑日志：记录 `overlay request->addView` 延迟、`view attached/detached` 生命周期、`25/50/75/100%` 进度时间戳；执行层分发日志保留 `start/completed/cancelled/failed` 与 `elapsed`，可直接对比两条时间线。
+206. 稳定性验证：以上日志增强后再次通过 `compileDebugKotlin`、`testDebugUnitTest`、`assembleDebug`。
+207. 动画起点对齐修复：反馈层进度起点从“View 构造时”改为“`onAttachedToWindow` 时”，消除 addView/attach 期间的隐性计时损耗。
+208. 执行起点对齐修复：`performRecordStrokes` 在发起分发前增加 `16ms` 同步延迟（约一帧），并打点 `feedbackExecSyncDelay`，减少“执行先动、动画后到”的体感偏差。
+209. 稳定性验证：以上对齐修复后再次通过 `compileDebugKotlin`、`testDebugUnitTest`、`assembleDebug`。
 
 ## 3. 正在进行
 
-1. 全局操作面板实机交互打磨（按钮尺寸、状态文案、误触控制、录制提示层反馈）。
+1. 全局操作面板实机交互打磨（录制态按钮间距/状态文案/误触控制、录制提示层反馈）。
 2. 把“运行 trace 与错误码”沉淀为可导出日志结构，为调试面板打基础。
 3. 继续推进页面状态层拆分：`MainActivity` -> `ViewModel + Route state`，让任务/控制台各自拥有独立状态模型。
 4. 浮窗编辑器与操作面板的导航协同（后续支持从操作面板直接进入当前任务编辑态）。
+5. 录制多指会话实机打磨（手指数上限、停顿阈值、不同机型采样密度）。
 
 ## 4. 下一步计划
 
@@ -197,10 +293,14 @@
 4. 流程图交互增强：预览布局持久化（当前为会话内）与连线信息密度优化。
 5. 导入/迁移链在任务体验稳定后接入（`LegacyIR -> migrateToLatest`）。
 6. UI 架构继续分层：引入 `RouteState`/`UIIntent`，减少 Activity 中业务判断。
+7. 录制动作编辑二期：单步删除/重排、多指 stroke 可视化编辑。
 
 ## 5. 风险与注意事项
 
 1. 不同 Android ROM 对 `WRITE_SECURE_SETTINGS` 下的辅助服务自动开启策略存在差异，需实机回归。
 2. 手势反馈层仅代表“尝试执行”，最终以手势分发统计 `success/failed` 为准。
 3. 后续新增主题风格时，要继续通过 `AppThemeMode + CmmClickerTheme` 管理，避免页面写死颜色回退成散乱样式。
-4. 录制功能当前为 MVP（单次手势追加动作），尚未提供连续录制会话、手势回放确认与动作命名策略。
+4. 录制功能已支持连续会话与停止后保存；后续仍需补齐“录制结果可视化回放校对”和“更细粒度动作编辑（例如单步删除/重排）”。
+5. 多指录制单次手势受 `AccessibilityService` stroke 数量限制（当前安全上限为 18 条），极端场景会进行裁剪。
+6. 多指 timed 分段回放在高采样密度下会增加分发次数（按时间边界切片）；若后续出现低端机卡顿，需要继续做时间片合并策略。
+7. 错峰多指当前走“单次 multi-stroke”回放路径以优先保证不取消；后续若需进一步提升错峰长按精度，可再做“预注册占位指针”或“分阶段手势重建”专项优化。

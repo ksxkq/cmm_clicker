@@ -411,7 +411,7 @@ class LocalFileTaskRepository(
         val result = linkedMapOf<String, Any?>()
         while (keys.hasNext()) {
             val key = keys.next()
-            result[key] = obj.opt(key)?.takeUnless { it == JSONObject.NULL }?.toString()
+            result[key] = decodeAnyValue(obj.opt(key))
         }
         return result
     }
@@ -419,12 +419,53 @@ class LocalFileTaskRepository(
     private fun encodeAnyMap(map: Map<String, Any?>): JSONObject {
         return JSONObject().apply {
             map.forEach { (key, value) ->
-                if (value == null) {
-                    put(key, JSONObject.NULL)
-                } else {
-                    put(key, value.toString())
+                put(key, encodeAnyValue(value))
+            }
+        }
+    }
+
+    private fun decodeAnyValue(value: Any?): Any? {
+        return when (value) {
+            null,
+            JSONObject.NULL,
+            -> null
+            is JSONObject -> decodeAnyMap(value)
+            is JSONArray -> buildList {
+                for (index in 0 until value.length()) {
+                    add(decodeAnyValue(value.opt(index)))
                 }
             }
+            is Number,
+            is Boolean,
+            is String,
+            -> value
+            else -> value.toString()
+        }
+    }
+
+    private fun encodeAnyValue(value: Any?): Any? {
+        return when (value) {
+            null -> JSONObject.NULL
+            is JSONObject,
+            is JSONArray,
+            is Number,
+            is Boolean,
+            is String,
+            -> value
+            is Map<*, *> -> JSONObject().apply {
+                value.forEach { (key, nestedValue) ->
+                    if (key is String) {
+                        put(key, encodeAnyValue(nestedValue))
+                    }
+                }
+            }
+            is Iterable<*> -> JSONArray().apply {
+                value.forEach { put(encodeAnyValue(it)) }
+            }
+            is Array<*> -> JSONArray().apply {
+                value.forEach { put(encodeAnyValue(it)) }
+            }
+            else -> value.toString()
         }
     }
 

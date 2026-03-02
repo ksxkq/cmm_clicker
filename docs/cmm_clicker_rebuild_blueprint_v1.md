@@ -296,3 +296,24 @@ interface ActionPlugin {
 1. 先冻结 `MVP 动作和流程语义`（一个小文档即可）。
 2. 再落地 `FlowGraph + Runtime + 4 个基础插件(click/swipe/record/jump)`。
 3. 同步做最小编辑器（列表 + jump 目标选择 + 连线预览）。
+
+## 13. 近期实现补充（2026-02-27）
+
+1. 操作面板录制从“单手势即时入库”升级为“会话式录制”：
+   - 录制中支持暂停/继续
+   - 停止后进入保存弹窗
+   - 保存时创建新任务并按录制顺序追加动作
+2. `TaskRepository.params` 的持久化实现已升级为递归结构编解码：
+   - 支持 `Map/List/Number/Boolean/String`
+   - 为 `record` 动作的路径点位（`points`）提供稳定存储，避免被字符串化后回放失真
+3. 录制会话增加“采集后即时回放”：
+   - 每采集一步手势都会做一次真实回放（并显示轨迹反馈）
+   - 回放时临时隐藏录制层，结束后恢复录制会话继续采集
+4. 录制采集与执行协议扩展为多指 stroke：
+   - 采集侧按 `pointerId` 记录 `points + timestamps + down/up`
+   - 运行侧 `record` 支持 `strokes`（含 `startDelayMs/durationMs`）并兼容旧 `points`
+   - 支持多指并发与“长按后拖动”回放
+   - Android O+ 下单指时间戳回放使用 `continueStroke` 分段执行停顿与移动，避免长按语义丢失
+5. 操作面板录制体验细化：
+   - 录制浮层从全透明改为轻量半透明遮罩（`#12000000`）
+   - `NORMAL <-> RECORDING` 切换动效提速，减少状态切换迟滞感

@@ -276,10 +276,33 @@
 207. 动画起点对齐修复：反馈层进度起点从“View 构造时”改为“`onAttachedToWindow` 时”，消除 addView/attach 期间的隐性计时损耗。
 208. 执行起点对齐修复：`performRecordStrokes` 在发起分发前增加 `16ms` 同步延迟（约一帧），并打点 `feedbackExecSyncDelay`，减少“执行先动、动画后到”的体感偏差。
 209. 稳定性验证：以上对齐修复后再次通过 `compileDebugKotlin`、`testDebugUnitTest`、`assembleDebug`。
+210. 修复“停止录制后保存弹窗无入场动画”：新增 `recordingSaveDialogOpenToken`，保存弹窗改为“打开 token 触发 + 首帧后进入”（`18ms`）以确保 `AnimatedVisibility` 发生 `false -> true` 转换，即使 settings overlay 是刚 `addView`。
+211. 修复“保存弹窗无退场动画”：新增 `scheduleSettingsOverlayRemovalIfIdle()`，在弹窗关闭时延迟 `180ms` 再移除 settings overlay，避免 `removeView` 抢占 exit 动画。
+212. 生命周期收敛：补充 `deferredSettingsRemovalJob` 取消逻辑，`show/hide/remove` 与录制状态重置时统一清理 `recordingSaveDialogOpenToken`，避免残留状态影响下一次动画。
+213. 稳定性验证：以上保存弹窗动画修复后再次通过 `compileDebugKotlin`、`testDebugUnitTest`、`assembleDebug`。
+214. 修复“关闭仍无动画”的根因：`SettingsOverlayContent` 顶部早退条件会在 `recordingSaveDialogVisible=false` 且 `settingsVisible=false` 时立即移除整棵 UI，导致 exit 动画无法执行；新增 `recordingSaveDialogAnimatingOut` 维持关闭过渡态，直到退场时长结束再清理。
+215. 关闭路径统一：新增 `dismissRecordingSaveDialogWithAnimation()`，`discard/confirm` 均改为先触发退场动画，再按状态决定是否移除 settings overlay，避免分支里直接 `visible=false + removeView` 抢动画。
+216. 状态机细节修正：关闭时不再立即重置 `recordingSaveDialogOpenToken`，避免 `remember(token)` 重建后丢失退出过渡。
+217. 稳定性验证：以上二次修复后再次通过 `compileDebugKotlin`、`testDebugUnitTest`、`assembleDebug`。
+218. 录制面板按钮顺序调整：录制态主控按钮从“暂停 + 停止”改为“停止 + 暂停”，减少误触暂停导致未保存录制会话的问题。
+219. 操作面板 `开始` 按钮新增二次确认：点击后先弹“确认开始任务”对话框，明确展示目标任务名，用户确认后才触发执行；取消则不启动任务。
+220. 交互对齐与稳定性验证：本轮改动后再次通过 `testDebugUnitTest` 与 `assembleDebug`。
+221. 修复“开始任务确认弹窗无入场动画”：新增 `startTaskConfirmDialogOpenToken`，确认弹窗打开改为“token 触发 + 首帧后进入”（与保存弹窗一致），避免 settings overlay 刚 `addView` 时直接处于 visible 状态导致无入场过渡。
+222. 修复“开始任务确认弹窗无退场动画”：新增 `startTaskConfirmDialogAnimatingOut`，并将关闭路径统一为 `dismissStartTaskConfirmDialogWithAnimation()`；退出期间保持 overlay 内容存活，延迟移除 `addView` 容器，避免 `removeView` 抢占动画。
+223. 弹窗样式统一化：新增 `OverlayDialogCardScaffold` 作为中心弹窗壳，`录制保存弹窗` 与 `开始确认弹窗` 复用同一套圆角/边框/间距与标题说明排版。
+224. 稳定性验证：以上修复后再次通过 `testDebugUnitTest` 与 `assembleDebug`。
+225. 弹窗移除策略从“固定延迟”改为“动画状态驱动”：去掉 `scheduleSettingsOverlayRemovalIfIdle` 的定时移除，新增 `removeSettingsOverlayIfIdle` + 退出动画完成回调，只有在 `AnimatedVisibility` 过渡真正结束后才触发 `removeView`。
+226. 退出收敛点新增：`onRecordingSaveDialogExitAnimationSettled` / `onStartTaskConfirmDialogExitAnimationSettled` 在关闭动画结束时统一清理 `animatingOut` 与 overlay 移除判定；若中途反向打开弹窗（动画被取消），则不会误移除背景层。
+227. `SettingsOverlayContent` 接入 `MutableTransitionState`：两个中心弹窗改为 `visibleState` 驱动，确保可检测到“退出完成”这一准确时机，再执行 overlay 回收。
+228. 稳定性验证：本轮“动画结束后移除”改造后再次通过 `testDebugUnitTest` 与 `assembleDebug`。
+229. 背景层观感统一：settings sheet 与中心确认弹窗的 scrim 参数收敛为统一配置（透明度/淡入淡出时长一致），减少“任务设置 vs 确认弹窗”背景半透明体感差异。
+230. 背景层回收时机再收敛：新增 `pendingSettingsOverlayRemoval`，只在“全部内容不可见 + scrim alpha 衰减到接近 0”后才执行 `removeSettingsOverlayIfIdle`，避免 scrim 尚未淡完即 `removeView` 导致的突兀闪断。
+231. 清理与打开路径同步：在打开设置页/确认弹窗时显式清空 pending 移除标记，防止关闭动画被取消后出现误回收。
+232. 稳定性验证：以上背景层统一与回收时序优化后再次通过 `testDebugUnitTest` 与 `assembleDebug`。
 
 ## 3. 正在进行
 
-1. 全局操作面板实机交互打磨（录制态按钮间距/状态文案/误触控制、录制提示层反馈）。
+1. 全局操作面板实机交互打磨（录制态按钮间距/状态文案/误触控制、开始执行确认链路与动效、录制提示层反馈）。
 2. 把“运行 trace 与错误码”沉淀为可导出日志结构，为调试面板打基础。
 3. 继续推进页面状态层拆分：`MainActivity` -> `ViewModel + Route state`，让任务/控制台各自拥有独立状态模型。
 4. 浮窗编辑器与操作面板的导航协同（后续支持从操作面板直接进入当前任务编辑态）。

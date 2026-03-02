@@ -17,6 +17,7 @@ import android.widget.TextView
 import androidx.compose.animation.AnimatedVisibility as AnimatedVisibilityBox
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
@@ -133,6 +134,9 @@ class TaskControlPanelGlobalOverlay(
         private const val PREF_NAME = "task_control_overlay"
         private const val KEY_SELECTED_TASK_ID = "selected_task_id"
         private const val KEY_LAST_STARTED_TASK_ID = "last_started_task_id"
+        private const val RECORDING_SAVE_DIALOG_ENTER_DELAY_MS = 18L
+        private const val AUX_OVERLAY_SCRIM_ALPHA = 0.5f
+        private const val AUX_OVERLAY_SCRIM_FADE_MS = 220
     }
 
     private data class RecordedStroke(
@@ -217,6 +221,10 @@ class TaskControlPanelGlobalOverlay(
     private var panelMode by mutableStateOf(PanelMode.NORMAL)
     private var recordingSaveDialogVisible by mutableStateOf(false)
     private var recordingSaveTaskName by mutableStateOf("")
+    private var startTaskConfirmDialogVisible by mutableStateOf(false)
+    private var startTaskConfirmTaskName by mutableStateOf("")
+    private var startTaskConfirmDialogOpenToken by mutableIntStateOf(0)
+    private var startTaskConfirmDialogAnimatingOut by mutableStateOf(false)
     private var recordedStepCount by mutableIntStateOf(0)
     private var recordingElapsedMs by mutableLongStateOf(0L)
     private var statusText by mutableStateOf("")
@@ -224,6 +232,11 @@ class TaskControlPanelGlobalOverlay(
     private var panelAnimationToken by mutableIntStateOf(0)
     private var panelDismissAnimating by mutableStateOf(false)
     private var panelNeedsEntryAnimation by mutableStateOf(true)
+    private var recordingSaveDialogOpenToken by mutableIntStateOf(0)
+    private var recordingSaveDialogAnimatingOut by mutableStateOf(false)
+    private var removeSettingsOverlayAfterRecordingDialogExit = false
+    private var removeSettingsOverlayAfterStartConfirmDialogExit = false
+    private var pendingSettingsOverlayRemoval = false
     private var panelOffsetX by mutableIntStateOf(dp(18))
     private var panelOffsetY by mutableIntStateOf(dp(220))
     private var selectedTaskId by mutableStateOf(prefs.getString(KEY_SELECTED_TASK_ID, null))
@@ -245,6 +258,15 @@ class TaskControlPanelGlobalOverlay(
             settingsEditorStore = null
             recordingSaveDialogVisible = false
             recordingSaveTaskName = ""
+            startTaskConfirmDialogVisible = false
+            startTaskConfirmTaskName = ""
+            startTaskConfirmDialogOpenToken = 0
+            startTaskConfirmDialogAnimatingOut = false
+            recordingSaveDialogOpenToken = 0
+            recordingSaveDialogAnimatingOut = false
+            removeSettingsOverlayAfterRecordingDialogExit = false
+            removeSettingsOverlayAfterStartConfirmDialogExit = false
+            pendingSettingsOverlayRemoval = false
             panelMode = PanelMode.NORMAL
             recordingPaused = false
             replayingGesture = false
@@ -418,6 +440,15 @@ class TaskControlPanelGlobalOverlay(
         settingsEditorStore = null
         recordingSaveDialogVisible = false
         recordingSaveTaskName = ""
+        startTaskConfirmDialogVisible = false
+        startTaskConfirmTaskName = ""
+        startTaskConfirmDialogOpenToken = 0
+        startTaskConfirmDialogAnimatingOut = false
+        recordingSaveDialogOpenToken = 0
+        recordingSaveDialogAnimatingOut = false
+        removeSettingsOverlayAfterRecordingDialogExit = false
+        removeSettingsOverlayAfterStartConfirmDialogExit = false
+        pendingSettingsOverlayRemoval = false
     }
 
     private fun removeOverlay() {
@@ -446,9 +477,93 @@ class TaskControlPanelGlobalOverlay(
         panelMode = PanelMode.NORMAL
         recordingSaveDialogVisible = false
         recordingSaveTaskName = ""
+        startTaskConfirmDialogVisible = false
+        startTaskConfirmTaskName = ""
+        startTaskConfirmDialogOpenToken = 0
+        startTaskConfirmDialogAnimatingOut = false
+        recordingSaveDialogOpenToken = 0
+        recordingSaveDialogAnimatingOut = false
+        removeSettingsOverlayAfterRecordingDialogExit = false
+        removeSettingsOverlayAfterStartConfirmDialogExit = false
+        pendingSettingsOverlayRemoval = false
         recordedGestures.clear()
         recordedStepCount = 0
         stopRecordingTicker(resetElapsed = true)
+    }
+
+    private fun removeSettingsOverlayIfIdle() {
+        if (!pendingSettingsOverlayRemoval) {
+            return
+        }
+        if (
+            settingsVisible ||
+            recordingSaveDialogVisible ||
+            recordingSaveDialogAnimatingOut ||
+            startTaskConfirmDialogVisible ||
+            startTaskConfirmDialogAnimatingOut
+        ) {
+            return
+        }
+        pendingSettingsOverlayRemoval = false
+        removeSettingsOverlay()
+        touchUi()
+    }
+
+    private fun dismissRecordingSaveDialogWithAnimation(
+        removeOverlayWhenIdle: Boolean,
+    ) {
+        if (!recordingSaveDialogVisible && !recordingSaveDialogAnimatingOut) {
+            if (removeOverlayWhenIdle && !settingsVisible) {
+                pendingSettingsOverlayRemoval = true
+                removeSettingsOverlayIfIdle()
+            }
+            return
+        }
+        recordingSaveDialogVisible = false
+        recordingSaveDialogAnimatingOut = true
+        removeSettingsOverlayAfterRecordingDialogExit = removeOverlayWhenIdle
+        touchUi()
+    }
+
+    private fun onRecordingSaveDialogExitAnimationSettled() {
+        if (!recordingSaveDialogAnimatingOut) {
+            return
+        }
+        recordingSaveDialogAnimatingOut = false
+        val shouldRemoveOverlay = removeSettingsOverlayAfterRecordingDialogExit
+        removeSettingsOverlayAfterRecordingDialogExit = false
+        if (shouldRemoveOverlay && !settingsVisible) {
+            pendingSettingsOverlayRemoval = true
+        }
+        touchUi()
+    }
+
+    private fun dismissStartTaskConfirmDialogWithAnimation(removeOverlayWhenIdle: Boolean) {
+        if (!startTaskConfirmDialogVisible && !startTaskConfirmDialogAnimatingOut) {
+            if (removeOverlayWhenIdle && !settingsVisible) {
+                pendingSettingsOverlayRemoval = true
+                removeSettingsOverlayIfIdle()
+            }
+            return
+        }
+        startTaskConfirmDialogVisible = false
+        startTaskConfirmDialogAnimatingOut = true
+        startTaskConfirmTaskName = ""
+        removeSettingsOverlayAfterStartConfirmDialogExit = removeOverlayWhenIdle
+        touchUi()
+    }
+
+    private fun onStartTaskConfirmDialogExitAnimationSettled() {
+        if (!startTaskConfirmDialogAnimatingOut) {
+            return
+        }
+        startTaskConfirmDialogAnimatingOut = false
+        val shouldRemoveOverlay = removeSettingsOverlayAfterStartConfirmDialogExit
+        removeSettingsOverlayAfterStartConfirmDialogExit = false
+        if (shouldRemoveOverlay && !settingsVisible) {
+            pendingSettingsOverlayRemoval = true
+        }
+        touchUi()
     }
 
     private fun panelWindowFlags(): Int {
@@ -539,7 +654,12 @@ class TaskControlPanelGlobalOverlay(
     }
 
     private fun openSettingsPanel() {
-        if (settingsVisible || recordingSaveDialogVisible || panelMode == PanelMode.RECORDING) {
+        if (
+            settingsVisible ||
+            recordingSaveDialogVisible ||
+            startTaskConfirmDialogVisible ||
+            panelMode == PanelMode.RECORDING
+        ) {
             return
         }
         panelNeedsEntryAnimation = false
@@ -549,6 +669,7 @@ class TaskControlPanelGlobalOverlay(
         settingsRoute = SettingsRoute.TaskList
         settingsTask = null
         settingsEditorStore = null
+        pendingSettingsOverlayRemoval = false
         ensureSettingsOverlayView()
         touchUi()
         scope.launch {
@@ -573,9 +694,8 @@ class TaskControlPanelGlobalOverlay(
             settingsRoute = SettingsRoute.TaskList
             settingsTask = null
             settingsEditorStore = null
-            if (!recordingSaveDialogVisible) {
-                removeSettingsOverlay()
-            }
+            pendingSettingsOverlayRemoval = true
+            touchUi()
             afterClosed?.invoke()
         }
     }
@@ -583,6 +703,10 @@ class TaskControlPanelGlobalOverlay(
     private fun onAuxOverlayBackdropTap() {
         if (recordingSaveDialogVisible) {
             discardRecordingSession("已取消保存")
+            return
+        }
+        if (startTaskConfirmDialogVisible) {
+            dismissStartTaskConfirmDialogWithAnimation(removeOverlayWhenIdle = !settingsVisible)
             return
         }
         if (!settingsVisible) {
@@ -679,7 +803,11 @@ class TaskControlPanelGlobalOverlay(
             panelEntered = true
             panelNeedsEntryAnimation = false
         }
-        val panelVisible = panelEntered && !panelDismissAnimating && !settingsVisible && !recordingSaveDialogVisible
+        val panelVisible = panelEntered &&
+            !panelDismissAnimating &&
+            !settingsVisible &&
+            !recordingSaveDialogVisible &&
+            !startTaskConfirmDialogVisible
         val panelAlpha by animateFloatAsState(
             targetValue = if (panelVisible) 1f else 0f,
             animationSpec = tween(durationMillis = 180),
@@ -745,19 +873,6 @@ class TaskControlPanelGlobalOverlay(
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
                                     CircleActionIconButton(
-                                        enabled = recording,
-                                        filled = !recordingPaused,
-                                        onClick = { toggleRecordingPause() },
-                                        icon = { tint ->
-                                            Icon(
-                                                imageVector = if (recordingPaused) Icons.Rounded.PlayArrow else Icons.Rounded.Pause,
-                                                contentDescription = if (recordingPaused) "继续录制" else "暂停录制",
-                                                tint = tint,
-                                                modifier = Modifier.size(18.dp),
-                                            )
-                                        },
-                                    )
-                                    CircleActionIconButton(
                                         enabled = recording || recordedStepCount > 0,
                                         filled = true,
                                         onClick = { stopRecordingSessionAndPromptSave() },
@@ -765,6 +880,19 @@ class TaskControlPanelGlobalOverlay(
                                             Icon(
                                                 imageVector = Icons.Rounded.Stop,
                                                 contentDescription = "停止并保存",
+                                                tint = tint,
+                                                modifier = Modifier.size(18.dp),
+                                            )
+                                        },
+                                    )
+                                    CircleActionIconButton(
+                                        enabled = recording,
+                                        filled = !recordingPaused,
+                                        onClick = { toggleRecordingPause() },
+                                        icon = { tint ->
+                                            Icon(
+                                                imageVector = if (recordingPaused) Icons.Rounded.PlayArrow else Icons.Rounded.Pause,
+                                                contentDescription = if (recordingPaused) "继续录制" else "暂停录制",
                                                 tint = tint,
                                                 modifier = Modifier.size(18.dp),
                                             )
@@ -836,7 +964,7 @@ class TaskControlPanelGlobalOverlay(
                                     if (panelDismissAnimating || settingsVisible) {
                                         return@CircleActionIconButton
                                     }
-                                    startLastTask()
+                                    promptStartLastTaskConfirmation()
                                 },
                                 icon = { tint ->
                                     Icon(
@@ -875,21 +1003,75 @@ class TaskControlPanelGlobalOverlay(
 
     @Composable
     private fun SettingsOverlayContent() {
-        if (!settingsVisible && !recordingSaveDialogVisible) {
+        if (
+            !settingsVisible &&
+            !recordingSaveDialogVisible &&
+            !recordingSaveDialogAnimatingOut &&
+            !startTaskConfirmDialogVisible &&
+            !startTaskConfirmDialogAnimatingOut &&
+            !pendingSettingsOverlayRemoval
+        ) {
             return
         }
-        val route = settingsRoute
+        val dialogOpenToken = recordingSaveDialogOpenToken
+        var dialogEntered by remember(dialogOpenToken) { mutableStateOf(false) }
+        LaunchedEffect(dialogOpenToken, recordingSaveDialogVisible) {
+            if (!recordingSaveDialogVisible) {
+                return@LaunchedEffect
+            }
+            dialogEntered = false
+            delay(RECORDING_SAVE_DIALOG_ENTER_DELAY_MS)
+            dialogEntered = true
+        }
+        val startTaskDialogOpenToken = startTaskConfirmDialogOpenToken
+        var startTaskDialogEntered by remember(startTaskDialogOpenToken) { mutableStateOf(false) }
+        LaunchedEffect(startTaskDialogOpenToken, startTaskConfirmDialogVisible) {
+            if (!startTaskConfirmDialogVisible) {
+                return@LaunchedEffect
+            }
+            startTaskDialogEntered = false
+            delay(RECORDING_SAVE_DIALOG_ENTER_DELAY_MS)
+            startTaskDialogEntered = true
+        }
+        val recordingDialogVisible = recordingSaveDialogVisible && dialogEntered
+        val recordingDialogTransitionState = remember { MutableTransitionState(false) }
+        recordingDialogTransitionState.targetState = recordingDialogVisible
+        val startTaskDialogVisible = startTaskConfirmDialogVisible && startTaskDialogEntered
+        val startTaskDialogTransitionState = remember { MutableTransitionState(false) }
+        startTaskDialogTransitionState.targetState = startTaskDialogVisible
+        if (
+            recordingSaveDialogAnimatingOut &&
+            recordingDialogTransitionState.isIdle &&
+            !recordingDialogTransitionState.currentState
+        ) {
+            LaunchedEffect(Unit) { onRecordingSaveDialogExitAnimationSettled() }
+        }
+        if (
+            startTaskConfirmDialogAnimatingOut &&
+            startTaskDialogTransitionState.isIdle &&
+            !startTaskDialogTransitionState.currentState
+        ) {
+            LaunchedEffect(Unit) { onStartTaskConfirmDialogExitAnimationSettled() }
+        }
         val sheetVisible = settingsVisible && settingsSheetVisible
+        val anyAuxContentVisible = sheetVisible ||
+            recordingDialogTransitionState.currentState ||
+            recordingDialogTransitionState.targetState ||
+            startTaskDialogTransitionState.currentState ||
+            startTaskDialogTransitionState.targetState
+        val route = settingsRoute
         val scrimTargetAlpha = when {
-            sheetVisible -> OverlayStackMotion.SHEET_SCRIM_ALPHA
-            recordingSaveDialogVisible -> 0.5f
+            anyAuxContentVisible -> AUX_OVERLAY_SCRIM_ALPHA
             else -> 0f
         }
         val settingsScrimAlpha by animateFloatAsState(
             targetValue = scrimTargetAlpha,
-            animationSpec = tween(durationMillis = 220),
+            animationSpec = tween(durationMillis = AUX_OVERLAY_SCRIM_FADE_MS),
             label = "control_settings_scrim_alpha",
         )
+        if (pendingSettingsOverlayRemoval && !anyAuxContentVisible && settingsScrimAlpha <= 0.01f) {
+            LaunchedEffect(Unit) { removeSettingsOverlayIfIdle() }
+        }
         val showActionLayer = route != SettingsRoute.TaskList
         val showNodeLayer = route is SettingsRoute.NodeEditor
         val showBaseLayer = !showNodeLayer
@@ -1079,7 +1261,7 @@ class TaskControlPanelGlobalOverlay(
                 }
             }
             AnimatedVisibilityBox(
-                visible = recordingSaveDialogVisible,
+                visibleState = recordingDialogTransitionState,
                 enter = fadeIn(animationSpec = tween(durationMillis = 180)) + slideInVertically(
                     animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
                     initialOffsetY = { fullHeight -> (fullHeight * 0.1f).roundToInt() },
@@ -1096,32 +1278,33 @@ class TaskControlPanelGlobalOverlay(
             ) {
                 RecordingSaveDialogCard()
             }
+            AnimatedVisibilityBox(
+                visibleState = startTaskDialogTransitionState,
+                enter = fadeIn(animationSpec = tween(durationMillis = 160)) + slideInVertically(
+                    animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
+                    initialOffsetY = { fullHeight -> (fullHeight * 0.08f).roundToInt() },
+                ),
+                exit = fadeOut(animationSpec = tween(durationMillis = 120)) + slideOutVertically(
+                    animationSpec = tween(durationMillis = 120, easing = FastOutSlowInEasing),
+                    targetOffsetY = { fullHeight -> (fullHeight * 0.05f).roundToInt() },
+                ),
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .padding(horizontal = 18.dp)
+                    .fillMaxWidth()
+                    .widthIn(max = 420.dp),
+            ) {
+                StartTaskConfirmDialogCard()
+            }
         }
     }
 
     @Composable
     private fun RecordingSaveDialogCard() {
-        Card(
-            shape = RoundedCornerShape(18.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Text(
-                    text = "保存录制任务",
-                    style = MaterialTheme.typography.titleMedium,
-                )
-                Text(
-                    text = "已录制 $recordedStepCount 步动作，保存为新任务。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+        OverlayDialogCardScaffold(
+            title = "保存录制任务",
+            description = "已录制 $recordedStepCount 步动作，保存为新任务。",
+            body = {
                 OutlinedTextField(
                     value = recordingSaveTaskName,
                     onValueChange = { recordingSaveTaskName = it },
@@ -1129,6 +1312,8 @@ class TaskControlPanelGlobalOverlay(
                     label = { Text("任务名称") },
                     singleLine = true,
                 )
+            },
+            actions = {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1146,8 +1331,73 @@ class TaskControlPanelGlobalOverlay(
                         Text("保存")
                     }
                 }
+            },
+        )
+    }
+
+    @Composable
+    private fun OverlayDialogCardScaffold(
+        title: String,
+        description: String,
+        body: @Composable () -> Unit = {},
+        actions: @Composable () -> Unit,
+    ) {
+        Card(
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                body()
+                actions()
             }
         }
+    }
+
+    @Composable
+    private fun StartTaskConfirmDialogCard() {
+        OverlayDialogCardScaffold(
+            title = "确认开始任务",
+            description = "是否开始执行任务：${startTaskConfirmTaskName.ifBlank { "未命名任务" }}",
+            actions = {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedButton(
+                        modifier = Modifier.weight(1f),
+                        onClick = {
+                            dismissStartTaskConfirmDialogWithAnimation(
+                                removeOverlayWhenIdle = !settingsVisible,
+                            )
+                        },
+                    ) {
+                        Text("取消")
+                    }
+                    OutlinedButton(
+                        modifier = Modifier.weight(1f),
+                        onClick = { confirmStartTaskFromDialog() },
+                    ) {
+                        Text("开始")
+                    }
+                }
+            },
+        )
     }
 
     @Composable
@@ -1515,14 +1765,44 @@ class TaskControlPanelGlobalOverlay(
         }
     }
 
+    private fun resolveCandidateTaskId(): String? {
+        return lastStartedTaskId
+            ?: selectedTaskId
+            ?: tasks.firstOrNull()?.taskId
+    }
+
+    private fun promptStartLastTaskConfirmation() {
+        if (running || settingsVisible || panelMode == PanelMode.RECORDING) {
+            return
+        }
+        val candidateTaskId = resolveCandidateTaskId()
+        if (candidateTaskId == null) {
+            statusText = "没有可执行任务"
+            touchUi()
+            return
+        }
+        val taskName = tasks.firstOrNull { it.taskId == candidateTaskId }?.name ?: "未命名任务"
+        ensureSettingsOverlayView()
+        pendingSettingsOverlayRemoval = false
+        startTaskConfirmTaskName = taskName
+        startTaskConfirmDialogOpenToken++
+        startTaskConfirmDialogAnimatingOut = false
+        removeSettingsOverlayAfterStartConfirmDialogExit = false
+        startTaskConfirmDialogVisible = true
+        touchUi()
+    }
+
+    private fun confirmStartTaskFromDialog() {
+        dismissStartTaskConfirmDialogWithAnimation(removeOverlayWhenIdle = !settingsVisible)
+        startLastTask()
+    }
+
     private fun startLastTask() {
         if (running) {
             return
         }
         scope.launch {
-            val candidateTaskId = lastStartedTaskId
-                ?: selectedTaskId
-                ?: tasks.firstOrNull()?.taskId
+            val candidateTaskId = resolveCandidateTaskId()
             if (candidateTaskId == null) {
                 statusText = "没有可执行任务"
                 touchUi()
@@ -1632,12 +1912,16 @@ class TaskControlPanelGlobalOverlay(
         if (recording || running) {
             return
         }
+        dismissStartTaskConfirmDialogWithAnimation(removeOverlayWhenIdle = !settingsVisible)
         recordingPaused = false
         replayingGesture = false
         recordedGestures.clear()
         recordedStepCount = 0
         recordingSaveDialogVisible = false
+        recordingSaveDialogAnimatingOut = false
+        removeSettingsOverlayAfterRecordingDialogExit = false
         recordingSaveTaskName = ""
+        recordingSaveDialogOpenToken = 0
         statusText = "录制已开始，请在屏幕上执行手势"
         touchUi()
         startCaptureOverlay()
@@ -1678,8 +1962,12 @@ class TaskControlPanelGlobalOverlay(
         }
         stopRecordingTicker(resetElapsed = false)
         recordingSaveTaskName = buildDefaultRecordedTaskName()
-        recordingSaveDialogVisible = true
         ensureSettingsOverlayView()
+        pendingSettingsOverlayRemoval = false
+        recordingSaveDialogOpenToken++
+        recordingSaveDialogAnimatingOut = false
+        removeSettingsOverlayAfterRecordingDialogExit = false
+        recordingSaveDialogVisible = true
         touchUi()
     }
 
@@ -1688,14 +1976,11 @@ class TaskControlPanelGlobalOverlay(
         panelMode = PanelMode.NORMAL
         recordingPaused = false
         replayingGesture = false
-        recordingSaveDialogVisible = false
+        dismissRecordingSaveDialogWithAnimation(removeOverlayWhenIdle = !settingsVisible)
         recordingSaveTaskName = ""
         recordedGestures.clear()
         recordedStepCount = 0
         stopRecordingTicker(resetElapsed = true)
-        if (!settingsVisible) {
-            removeSettingsOverlay()
-        }
         statusText = message
         touchUi()
     }
@@ -1728,14 +2013,11 @@ class TaskControlPanelGlobalOverlay(
             panelMode = PanelMode.NORMAL
             recordingPaused = false
             replayingGesture = false
-            recordingSaveDialogVisible = false
+            dismissRecordingSaveDialogWithAnimation(removeOverlayWhenIdle = !settingsVisible)
             recordingSaveTaskName = ""
             recordedGestures.clear()
             recordedStepCount = 0
             stopRecordingTicker(resetElapsed = true)
-            if (!settingsVisible) {
-                removeSettingsOverlay()
-            }
             statusText = "已保存录制任务：${saved.name}"
             touchUi()
         }

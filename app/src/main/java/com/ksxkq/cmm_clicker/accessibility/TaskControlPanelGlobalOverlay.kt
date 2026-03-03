@@ -98,6 +98,7 @@ import androidx.compose.ui.platform.AndroidUiDispatcher
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.mutableStateMapOf
@@ -123,7 +124,12 @@ import com.ksxkq.cmm_clicker.core.model.TaskBundle
 import com.ksxkq.cmm_clicker.core.model.TaskFlow
 import com.ksxkq.cmm_clicker.core.runtime.FlowRuntimeEngine
 import com.ksxkq.cmm_clicker.core.runtime.RuntimeEngineOptions
+import com.ksxkq.cmm_clicker.core.runtime.RuntimeExecutionResult
+import com.ksxkq.cmm_clicker.core.runtime.RuntimeExecutionStatus
 import com.ksxkq.cmm_clicker.core.runtime.RuntimeRunReport
+import com.ksxkq.cmm_clicker.core.runtime.RuntimeTraceCollector
+import com.ksxkq.cmm_clicker.core.runtime.RuntimeTraceEvent
+import com.ksxkq.cmm_clicker.core.runtime.RuntimeTracePhase
 import com.ksxkq.cmm_clicker.feature.editor.EditorParamSchemaRegistry
 import com.ksxkq.cmm_clicker.feature.editor.EditorParamValidator
 import com.ksxkq.cmm_clicker.feature.editor.ParamFieldDefinition
@@ -200,6 +206,7 @@ class TaskControlPanelGlobalOverlay(
     private enum class PanelMode {
         NORMAL,
         RECORDING,
+        RUNNING,
     }
 
     private sealed interface SettingsRoute {
@@ -264,6 +271,12 @@ class TaskControlPanelGlobalOverlay(
     private var recordedStepCount by mutableIntStateOf(0)
     private var recordingElapsedMs by mutableLongStateOf(0L)
     private var statusText by mutableStateOf("")
+    private var runningTaskName by mutableStateOf("")
+    private var runningStepCount by mutableIntStateOf(0)
+    private var runningCurrentFlowId by mutableStateOf("")
+    private var runningCurrentNodeId by mutableStateOf("")
+    private var runningLastMessage by mutableStateOf("")
+    private var runningLastErrorCode by mutableStateOf("")
     private var uiRevision by mutableIntStateOf(0)
     private var panelAnimationToken by mutableIntStateOf(0)
     private var panelDismissAnimating by mutableStateOf(false)
@@ -336,6 +349,7 @@ class TaskControlPanelGlobalOverlay(
         clickPickerX = 0f
         clickPickerY = 0f
         panelMode = PanelMode.NORMAL
+        resetRunningPanelState()
         recordingPaused = false
         replayingGesture = false
         recordedGestures.clear()
@@ -554,6 +568,7 @@ class TaskControlPanelGlobalOverlay(
         recordingPaused = false
         replayingGesture = false
         panelMode = PanelMode.NORMAL
+        resetRunningPanelState()
         recordingSaveDialogVisible = false
         recordingSaveTaskName = ""
         startTaskConfirmDialogVisible = false
@@ -925,7 +940,13 @@ class TaskControlPanelGlobalOverlay(
 
         Card(
             modifier = Modifier
-                .width(if (panelMode == PanelMode.RECORDING) 222.dp else 186.dp)
+                .width(
+                    when (panelMode) {
+                        PanelMode.RECORDING -> 222.dp
+                        PanelMode.RUNNING -> 264.dp
+                        PanelMode.NORMAL -> 186.dp
+                    },
+                )
                 .graphicsLayer {
                     alpha = panelAlpha
                     scaleX = panelScale
@@ -947,140 +968,214 @@ class TaskControlPanelGlobalOverlay(
                     animationSpec = tween(durationMillis = 80, easing = FastOutSlowInEasing),
                     label = "control_panel_mode",
                 ) { mode ->
-                    if (mode == PanelMode.RECORDING) {
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
+                    when (mode) {
+                        PanelMode.RECORDING -> {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Row(
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
-                                    CircleActionIconButton(
-                                        enabled = recording || recordedStepCount > 0,
-                                        filled = true,
-                                        onClick = { stopRecordingSessionAndPromptSave() },
-                                        icon = { tint ->
-                                            Icon(
-                                                imageVector = Icons.Rounded.Stop,
-                                                contentDescription = "停止并保存",
-                                                tint = tint,
-                                                modifier = Modifier.size(18.dp),
-                                            )
-                                        },
-                                    )
-                                    CircleActionIconButton(
-                                        enabled = recording,
-                                        filled = !recordingPaused,
-                                        onClick = { toggleRecordingPause() },
-                                        icon = { tint ->
-                                            Icon(
-                                                imageVector = if (recordingPaused) Icons.Rounded.PlayArrow else Icons.Rounded.Pause,
-                                                contentDescription = if (recordingPaused) "继续录制" else "暂停录制",
-                                                tint = tint,
-                                                modifier = Modifier.size(18.dp),
-                                            )
-                                        },
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        CircleActionIconButton(
+                                            enabled = recording || recordedStepCount > 0,
+                                            filled = true,
+                                            onClick = { stopRecordingSessionAndPromptSave() },
+                                            icon = { tint ->
+                                                Icon(
+                                                    imageVector = Icons.Rounded.Stop,
+                                                    contentDescription = "停止并保存",
+                                                    tint = tint,
+                                                    modifier = Modifier.size(18.dp),
+                                                )
+                                            },
+                                        )
+                                        CircleActionIconButton(
+                                            enabled = recording,
+                                            filled = !recordingPaused,
+                                            onClick = { toggleRecordingPause() },
+                                            icon = { tint ->
+                                                Icon(
+                                                    imageVector = if (recordingPaused) Icons.Rounded.PlayArrow else Icons.Rounded.Pause,
+                                                    contentDescription = if (recordingPaused) "继续录制" else "暂停录制",
+                                                    tint = tint,
+                                                    modifier = Modifier.size(18.dp),
+                                                )
+                                            },
+                                        )
+                                    }
+                                    Text(
+                                        text = formatRecordingDuration(recordingElapsedMs),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
                                 }
                                 Text(
-                                    text = formatRecordingDuration(recordingElapsedMs),
+                                    text = if (recordingPaused) {
+                                        "录制已暂停 · $recordedStepCount 步"
+                                    } else if (replayingGesture) {
+                                        "正在回放 · $recordedStepCount 步"
+                                    } else {
+                                        "录制中 · $recordedStepCount 步"
+                                    },
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
-                            Text(
-                                text = if (recordingPaused) {
-                                    "录制已暂停 · $recordedStepCount 步"
-                                } else if (replayingGesture) {
-                                    "正在回放 · $recordedStepCount 步"
-                                } else {
-                                    "录制中 · $recordedStepCount 步"
-                                },
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
                         }
-                    } else {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            CircleActionIconButton(
-                                enabled = !settingsVisible && !running,
-                                onClick = {
-                                    if (panelDismissAnimating || settingsVisible || running) {
-                                        return@CircleActionIconButton
-                                    }
-                                    openSettingsPanel()
-                                },
-                                icon = { tint ->
-                                    Icon(
-                                        imageVector = Icons.Rounded.Settings,
-                                        contentDescription = "设置",
-                                        tint = tint,
-                                        modifier = Modifier.size(18.dp),
+
+                        PanelMode.RUNNING -> {
+                            val errorCodeText = runningLastErrorCode.ifBlank { "-" }
+                            val hasErrorCode = runningLastErrorCode.isNotBlank()
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(122.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    CircleActionIconButton(
+                                        enabled = running,
+                                        filled = true,
+                                        onClick = { stopRunningTask() },
+                                        icon = { tint ->
+                                            Icon(
+                                                imageVector = Icons.Rounded.Stop,
+                                                contentDescription = "停止执行",
+                                                tint = tint,
+                                                modifier = Modifier.size(18.dp),
+                                            )
+                                        },
                                     )
-                                },
-                            )
-                            CircleActionIconButton(
-                                enabled = !running && !settingsVisible,
-                                filled = false,
-                                onClick = {
-                                    if (panelDismissAnimating || settingsVisible || running) {
-                                        return@CircleActionIconButton
-                                    }
-                                    startRecordingSession()
-                                },
-                                icon = { tint ->
-                                    Icon(
-                                        imageVector = Icons.Rounded.FiberManualRecord,
-                                        contentDescription = "录制",
-                                        tint = tint,
-                                        modifier = Modifier.size(18.dp),
+                                    Text(
+                                        text = "已执行 $runningStepCount 步",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
                                     )
-                                },
-                            )
-                            CircleActionIconButton(
-                                enabled = !settingsVisible,
-                                filled = true,
-                                onClick = {
-                                    if (panelDismissAnimating || settingsVisible) {
-                                        return@CircleActionIconButton
-                                    }
-                                    if (running) {
-                                        stopRunningTask()
+                                }
+                                Text(
+                                    text = "任务：${runningTaskName.ifBlank { "未命名任务" }}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    text = "当前：${runningCurrentFlowId.ifBlank { "-" }}/${runningCurrentNodeId.ifBlank { "-" }}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    text = "错误码：$errorCodeText",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (hasErrorCode) {
+                                        MaterialTheme.colorScheme.error
                                     } else {
-                                        promptStartLastTaskConfirmation()
-                                    }
-                                },
-                                icon = { tint ->
-                                    Icon(
-                                        imageVector = if (running) Icons.Rounded.Stop else Icons.Rounded.PlayArrow,
-                                        contentDescription = if (running) "停止执行" else "开始",
-                                        tint = tint,
-                                        modifier = Modifier.size(18.dp),
-                                    )
-                                },
-                            )
-                            CircleActionIconButton(
-                                enabled = !settingsVisible,
-                                onClick = {
-                                    if (!settingsVisible) {
-                                        dismissPanelWithAnimation()
-                                    }
-                                },
-                                icon = { tint ->
-                                    Icon(
-                                        imageVector = Icons.Rounded.Close,
-                                        contentDescription = "移除面板",
-                                        tint = tint,
-                                        modifier = Modifier.size(18.dp),
-                                    )
-                                },
-                            )
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    text = "状态：${runningLastMessage.ifBlank { "运行中..." }}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+
+                        PanelMode.NORMAL -> {
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                CircleActionIconButton(
+                                    enabled = !settingsVisible && !running,
+                                    onClick = {
+                                        if (panelDismissAnimating || settingsVisible || running) {
+                                            return@CircleActionIconButton
+                                        }
+                                        openSettingsPanel()
+                                    },
+                                    icon = { tint ->
+                                        Icon(
+                                            imageVector = Icons.Rounded.Settings,
+                                            contentDescription = "设置",
+                                            tint = tint,
+                                            modifier = Modifier.size(18.dp),
+                                        )
+                                    },
+                                )
+                                CircleActionIconButton(
+                                    enabled = !running && !settingsVisible,
+                                    filled = false,
+                                    onClick = {
+                                        if (panelDismissAnimating || settingsVisible || running) {
+                                            return@CircleActionIconButton
+                                        }
+                                        startRecordingSession()
+                                    },
+                                    icon = { tint ->
+                                        Icon(
+                                            imageVector = Icons.Rounded.FiberManualRecord,
+                                            contentDescription = "录制",
+                                            tint = tint,
+                                            modifier = Modifier.size(18.dp),
+                                        )
+                                    },
+                                )
+                                CircleActionIconButton(
+                                    enabled = !settingsVisible,
+                                    filled = true,
+                                    onClick = {
+                                        if (panelDismissAnimating || settingsVisible) {
+                                            return@CircleActionIconButton
+                                        }
+                                        if (running) {
+                                            stopRunningTask()
+                                        } else {
+                                            promptStartLastTaskConfirmation()
+                                        }
+                                    },
+                                    icon = { tint ->
+                                        Icon(
+                                            imageVector = if (running) Icons.Rounded.Stop else Icons.Rounded.PlayArrow,
+                                            contentDescription = if (running) "停止执行" else "开始",
+                                            tint = tint,
+                                            modifier = Modifier.size(18.dp),
+                                        )
+                                    },
+                                )
+                                CircleActionIconButton(
+                                    enabled = !settingsVisible,
+                                    onClick = {
+                                        if (!settingsVisible) {
+                                            dismissPanelWithAnimation()
+                                        }
+                                    },
+                                    icon = { tint ->
+                                        Icon(
+                                            imageVector = Icons.Rounded.Close,
+                                            contentDescription = "移除面板",
+                                            tint = tint,
+                                            modifier = Modifier.size(18.dp),
+                                        )
+                                    },
+                                )
+                            }
                         }
                     }
                 }
@@ -1868,6 +1963,64 @@ class TaskControlPanelGlobalOverlay(
         startLastTask()
     }
 
+    private fun beginRunningPanel(task: TaskRecord) {
+        panelMode = PanelMode.RUNNING
+        runningTaskName = task.name.ifBlank { "未命名任务" }
+        runningStepCount = 0
+        runningCurrentFlowId = "-"
+        runningCurrentNodeId = "-"
+        runningLastMessage = "等待执行..."
+        runningLastErrorCode = ""
+    }
+
+    private fun resetRunningPanelState() {
+        runningTaskName = ""
+        runningStepCount = 0
+        runningCurrentFlowId = ""
+        runningCurrentNodeId = ""
+        runningLastMessage = ""
+        runningLastErrorCode = ""
+    }
+
+    private fun updateRunningPanelFromTrace(event: RuntimeTraceEvent) {
+        runningCurrentFlowId = event.flowId
+        runningCurrentNodeId = event.nodeId
+        runningStepCount = maxOf(runningStepCount, event.step + 1)
+        when (event.phase) {
+            RuntimeTracePhase.NODE_START -> {
+                runningLastMessage = "执行中"
+            }
+
+            RuntimeTracePhase.NODE_END -> {
+                runningLastMessage = event.message?.takeIf { it.isNotBlank() } ?: "动作已完成"
+            }
+
+            RuntimeTracePhase.NODE_ERROR -> {
+                runningLastMessage = event.message?.takeIf { it.isNotBlank() } ?: "执行失败"
+                runningLastErrorCode = event.details["errorCode"]
+                    ?.takeIf { it.isNotBlank() && it != "-" }
+                    ?: runningLastErrorCode
+            }
+        }
+    }
+
+    private fun updateRunningPanelFromResult(result: RuntimeExecutionResult) {
+        runningStepCount = result.stepCount.coerceAtLeast(runningStepCount)
+        val errorCode = result.traceEvents
+            .lastOrNull { it.phase == RuntimeTracePhase.NODE_ERROR }
+            ?.details
+            ?.get("errorCode")
+            ?.takeIf { it.isNotBlank() && it != "-" }
+        if (!errorCode.isNullOrBlank()) {
+            runningLastErrorCode = errorCode
+        }
+        runningLastMessage = when (result.status) {
+            RuntimeExecutionStatus.COMPLETED -> "执行完成"
+            RuntimeExecutionStatus.STOPPED -> "已停止"
+            RuntimeExecutionStatus.FAILED -> result.message?.takeIf { it.isNotBlank() } ?: "执行失败"
+        }
+    }
+
     private fun startLastTask() {
         if (running || runTaskJob?.isActive == true) {
             return
@@ -1891,9 +2044,19 @@ class TaskControlPanelGlobalOverlay(
                 lastStartedTaskId = task.taskId
                 persistIds()
                 running = true
+                beginRunningPanel(task)
                 statusText = "运行中..."
                 touchUi()
                 val startedAtMs = System.currentTimeMillis()
+                val traceCollector = OverlayRuntimeTraceCollector { event ->
+                    scope.launch(Dispatchers.Main.immediate) {
+                        if (!running) {
+                            return@launch
+                        }
+                        updateRunningPanelFromTrace(event)
+                        touchUi()
+                    }
+                }
                 val result = withContext(Dispatchers.Default) {
                     FlowRuntimeEngine(
                         options = RuntimeEngineOptions(
@@ -1901,8 +2064,12 @@ class TaskControlPanelGlobalOverlay(
                             maxSteps = 200,
                             stopOnValidationError = true,
                         ),
-                    ).execute(task.bundle)
+                    ).execute(
+                        bundle = task.bundle,
+                        traceCollector = traceCollector,
+                    )
                 }
+                updateRunningPanelFromResult(result)
                 val finishedAtMs = System.currentTimeMillis()
                 val summary = buildString {
                     append("模式=REAL ")
@@ -1931,13 +2098,20 @@ class TaskControlPanelGlobalOverlay(
                 statusText = summary
                 touchUi()
             } catch (_: CancellationException) {
+                runningLastMessage = "用户已停止"
+                runningLastErrorCode = ""
                 statusText = "任务已停止"
                 touchUi()
             } catch (error: Throwable) {
+                runningLastMessage = "运行异常"
+                runningLastErrorCode = ""
                 statusText = "运行失败: ${error.message ?: "unknown"}"
                 touchUi()
             } finally {
                 running = false
+                if (panelMode == PanelMode.RUNNING) {
+                    panelMode = PanelMode.NORMAL
+                }
                 if (runTaskJob === launchJob) {
                     runTaskJob = null
                 }
@@ -1953,6 +2127,7 @@ class TaskControlPanelGlobalOverlay(
             touchUi()
             return
         }
+        runningLastMessage = "正在停止..."
         statusText = "正在停止任务..."
         touchUi()
         job.cancel(CancellationException("user_requested_stop"))
@@ -2799,6 +2974,23 @@ private class RecordingTrailOverlayView(
         if (completedTrails.isNotEmpty()) {
             postInvalidateOnAnimation()
         }
+    }
+}
+
+private class OverlayRuntimeTraceCollector(
+    private val onAdd: (RuntimeTraceEvent) -> Unit,
+) : RuntimeTraceCollector {
+    private val events = mutableListOf<RuntimeTraceEvent>()
+
+    override fun add(event: RuntimeTraceEvent) {
+        synchronized(events) {
+            events += event
+        }
+        onAdd(event)
+    }
+
+    override fun snapshot(): List<RuntimeTraceEvent> {
+        return synchronized(events) { events.toList() }
     }
 }
 

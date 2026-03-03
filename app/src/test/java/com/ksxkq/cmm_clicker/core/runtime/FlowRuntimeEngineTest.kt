@@ -301,4 +301,44 @@ class FlowRuntimeEngineTest {
         assertEquals("main", endEvent.details["nextFlowId"])
         assertEquals("end", endEvent.details["nextNodeId"])
     }
+
+    @Test
+    fun `should normalize broken sequential chain before execution`() {
+        val flow = TaskFlow(
+            flowId = "main",
+            name = "main",
+            entryNodeId = "start",
+            nodes = listOf(
+                FlowNode(nodeId = "start", kind = NodeKind.START),
+                FlowNode(nodeId = "click_1", kind = NodeKind.ACTION, actionType = ActionType.CLICK),
+                FlowNode(nodeId = "end", kind = NodeKind.END),
+                FlowNode(nodeId = "click_2", kind = NodeKind.ACTION, actionType = ActionType.CLICK),
+            ),
+            edges = listOf(
+                FlowEdge(edgeId = "e1", fromNodeId = "start", toNodeId = "click_1"),
+                FlowEdge(edgeId = "e2", fromNodeId = "click_1", toNodeId = "end"),
+            ),
+        )
+        val bundle = TaskBundle(
+            bundleId = "bundle_normalize",
+            name = "normalize test",
+            schemaVersion = 1,
+            entryFlowId = "main",
+            flows = listOf(flow),
+        )
+
+        val result = runSuspend {
+            FlowRuntimeEngine(
+                options = RuntimeEngineOptions(dryRun = true),
+            ).execute(bundle = bundle)
+        }
+
+        assertEquals(RuntimeExecutionStatus.COMPLETED, result.status)
+        val startedNodes = result.traceEvents
+            .filter { it.phase == RuntimeTracePhase.NODE_START }
+            .map { it.nodeId }
+        assertTrue(startedNodes.contains("click_1"))
+        assertTrue(startedNodes.contains("click_2"))
+        assertTrue(startedNodes.indexOf("click_2") > startedNodes.indexOf("click_1"))
+    }
 }

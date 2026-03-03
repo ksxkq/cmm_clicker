@@ -4,6 +4,9 @@ import com.ksxkq.cmm_clicker.core.model.ActionType
 import com.ksxkq.cmm_clicker.core.model.EdgeConditionType
 import com.ksxkq.cmm_clicker.core.model.NodeKind
 import com.ksxkq.cmm_clicker.core.model.TaskFlow
+import com.ksxkq.cmm_clicker.core.model.TaskBundle
+import com.ksxkq.cmm_clicker.core.model.FlowNode
+import com.ksxkq.cmm_clicker.core.model.FlowEdge
 import com.ksxkq.cmm_clicker.core.runtime.SampleFlowBundleFactory
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -208,13 +211,52 @@ class TaskGraphEditorStoreTest {
         assertSequentialAlwaysChain(mainFlow)
     }
 
+    @Test
+    fun initStore_shouldRebuildChainWhenEndNodeIsNotLast() {
+        val flow = TaskFlow(
+            flowId = "main",
+            name = "main",
+            entryNodeId = "start",
+            nodes = listOf(
+                FlowNode(nodeId = "start", kind = NodeKind.START),
+                FlowNode(nodeId = "click_1", kind = NodeKind.ACTION, actionType = ActionType.CLICK),
+                FlowNode(nodeId = "end", kind = NodeKind.END),
+                FlowNode(nodeId = "click_2", kind = NodeKind.ACTION, actionType = ActionType.CLICK),
+            ),
+            edges = listOf(
+                FlowEdge(edgeId = "e1", fromNodeId = "start", toNodeId = "click_1"),
+                FlowEdge(edgeId = "e2", fromNodeId = "click_1", toNodeId = "end"),
+            ),
+        )
+        val store = TaskGraphEditorStore(
+            initialBundle = TaskBundle(
+                bundleId = "bundle",
+                name = "bundle",
+                schemaVersion = 1,
+                entryFlowId = "main",
+                flows = listOf(flow),
+            ),
+        )
+        val normalized = store.state().bundle.findFlow("main")!!
+        val always = normalized.edges.filter { it.conditionType == EdgeConditionType.ALWAYS }
+        assertEquals("click_1", always.firstOrNull { it.fromNodeId == "start" }?.toNodeId)
+        assertEquals("click_2", always.firstOrNull { it.fromNodeId == "click_1" }?.toNodeId)
+        assertEquals("end", always.firstOrNull { it.fromNodeId == "click_2" }?.toNodeId)
+        assertTrue(always.none { it.fromNodeId == "end" })
+    }
+
     private fun assertSequentialAlwaysChain(flow: TaskFlow) {
         val alwaysEdges = flow.edges.filter { it.conditionType == EdgeConditionType.ALWAYS }
-        assertEquals((flow.nodes.size - 1).coerceAtLeast(0), alwaysEdges.size)
-        flow.nodes.zipWithNext().forEach { (from, to) ->
-            if (from.kind == NodeKind.END) {
-                return@forEach
-            }
+        val start = flow.nodes.firstOrNull { it.kind == NodeKind.START }
+        val end = flow.nodes.firstOrNull { it.kind == NodeKind.END }
+        val middle = flow.nodes.filter { it.kind != NodeKind.START && it.kind != NodeKind.END }
+        val expectedOrder = buildList {
+            if (start != null) add(start)
+            addAll(middle)
+            if (end != null) add(end)
+        }
+        assertEquals((expectedOrder.size - 1).coerceAtLeast(0), alwaysEdges.size)
+        expectedOrder.zipWithNext().forEach { (from, to) ->
             val edge = alwaysEdges.firstOrNull { it.fromNodeId == from.nodeId }
             assertNotNull("missing ALWAYS edge from ${from.nodeId}", edge)
             assertEquals(to.nodeId, edge!!.toNodeId)

@@ -44,6 +44,7 @@ import com.ksxkq.cmm_clicker.feature.task.TaskRecord
 import com.ksxkq.cmm_clicker.ui.AppDropdownMenu
 import com.ksxkq.cmm_clicker.ui.AppDropdownMenuItem
 import com.ksxkq.cmm_clicker.ui.CircleActionIconButton
+import com.ksxkq.cmm_clicker.ui.TaskLibraryPanel
 
 @Composable
 private fun rememberActionListUiState(
@@ -143,6 +144,33 @@ private fun defaultActionDurationMs(actionType: ActionType?): Long {
         ActionType.DUP_CLICK -> 50L
         else -> 0L
     }
+}
+
+@Composable
+internal fun TaskControlSettingsTaskListPage(
+    tasks: List<TaskRecord>,
+    running: Boolean,
+    statusText: String,
+    onCreateTask: (String) -> Unit,
+    onTaskCardClick: (String) -> Unit,
+    onRenameTask: (String, String) -> Unit,
+    onDuplicateTask: (String) -> Unit,
+    onDeleteTask: (String) -> Unit,
+) {
+    TaskLibraryPanel(
+        tasks = tasks,
+        running = running,
+        taskOperationMessage = statusText,
+        onCreateTask = onCreateTask,
+        onTaskCardClick = onTaskCardClick,
+        onRenameTask = onRenameTask,
+        onDuplicateTask = onDuplicateTask,
+        onDeleteTask = onDeleteTask,
+        onRunTask = { },
+        showRunAction = false,
+        showManageMenu = true,
+        showCreateControls = true,
+    )
 }
 
 @Composable

@@ -479,13 +479,22 @@
 410. 页面菜单调用收敛：`TaskControlPanelEditorPages.kt` 中“添加动作”下拉菜单改为遍历 `AddActionPreset.entries`，避免重复分支与文案漂移。
 411. 交互单测补齐：新增 `TaskControlPanelActionPresetsTest`，覆盖 `CLICK/SWIPE/RECORD/DUP_CLICK/JUMP` 五类新增动作后节点 `kind/actionType` 的预期结果。
 412. 稳定性验证：以上“添加动作预设提取 + 单测”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+413. 任务列表页组件化继续推进：`SettingsTaskListPage` UI 迁移为 `TaskControlSettingsTaskListPage`（位于 `TaskControlPanelEditorPages.kt`），`TaskControlPanelGlobalOverlay` 保留任务 CRUD 调度方法（`create/rename/duplicate/deleteTaskFromSettings`）并通过回调绑定。
+414. Overlay 职责继续收敛：任务列表页从“UI + 异步仓库操作混排”改为“UI 组件 + 独立操作方法”，降低页面函数复杂度并保持行为一致。
+415. 质量门禁补齐：本轮重构后再次通过 `lintDebug`（HTML 报告：`app/build/reports/lint-results-debug.html`），确认未引入新的 lint 阻断项。
+416. 稳定性验证：以上“任务列表页组件化 + lint 回归”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest`、`assembleDebug` 与 `lintDebug`。
+417. 执行链路问题修复：定位并修复“任务执行只跑首动作”的高频场景，根因是历史任务出现 `END` 节点不在末尾时，顺序 `ALWAYS` 主链在编辑保存后被提前截断。
+418. 编辑器主链归一化增强：`TaskGraphEditorStore` 的 `normalizeFlowSequentialAlwaysEdges` 改为按“`START + 非 START/END 节点 + END`”构建顺序链，避免 `END` 位于中间时吞掉后续动作。
+419. 运行时兜底兼容：`FlowRuntimeEngine` 增加执行前规范化，仅在检测到“`END` 后仍有可执行节点”时重建顺序 `ALWAYS` 边，兼容已存量的异常链路数据且不干扰正常分支图。
+420. 录制入库顺序修复：`appendRecordedGesture` 新增动作改为插入到 `END` 之前，不再把录制动作追加到 `END` 之后，减少后续编辑时链路被重写截断的风险。
+421. 回归测试补齐：新增/调整 `TaskGraphEditorStoreTest` 与 `FlowRuntimeEngineTest` 覆盖“`END` 中间节点链路修复”场景；并完成 `:app:compileDebugKotlin`、`testDebugUnitTest`、`assembleDebug` 验证通过。
 
 ## 3. 正在进行
 
 1. 全局操作面板实机交互打磨（录制态按钮间距/状态文案/误触控制、开始执行确认链路与动效、录制提示层反馈）。
 2. 调试面板前置能力推进：基于已落地的运行历史列表，继续补齐筛选、搜索、分页与分享链路。
 3. 继续推进页面状态层拆分第二阶段：把 `TaskControlPanelGlobalOverlay` 的编辑/运行状态进一步拆成可复用状态模型与控制器，降低超长文件维护成本（已先完成图形预览子模块抽离）。
-4. 编辑页组件化：`ActionList/NodeEditor`、草稿状态容器、参数分组、交互逻辑、动作新增预设提取及对应单测已完成；本阶段进入收尾，可转入实机联调与体验回归。
+4. 编辑页组件化：`TaskList/ActionList/NodeEditor`、状态容器、规则逻辑与单测已完成；当前进入实机联调与体验回归阶段。
 5. 录制多指会话实机打磨（手指数上限、停顿阈值、不同机型采样密度）。
 6. 首页任务入口已收敛为单按钮，后续观察是否需要在首页增加“最近任务摘要”只读信息（不引入第二条编辑路径）。
 
@@ -509,3 +518,4 @@
 6. 多指 timed 分段回放在高采样密度下会增加分发次数（按时间边界切片）；若后续出现低端机卡顿，需要继续做时间片合并策略。
 7. 错峰多指当前走“单次 multi-stroke”回放路径以优先保证不取消；后续若需进一步提升错峰长按精度，可再做“预注册占位指针”或“分阶段手势重建”专项优化。
 8. 目前编辑链路集中在 `TaskControlPanelGlobalOverlay` 单文件内，后续重构需确保录制控制与任务编辑状态拆分后仍保持单向数据流，避免状态互相污染。
+9. 运行时“执行前顺序边兜底”当前只在检测到 `END` 节点后仍存在可执行节点时触发；若后续引入更复杂的非线性流程模板，需要评估是否扩展为更通用的迁移/修复策略。

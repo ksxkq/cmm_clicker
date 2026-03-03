@@ -135,7 +135,6 @@ import com.ksxkq.cmm_clicker.feature.task.TaskRecord
 import com.ksxkq.cmm_clicker.ui.AppDropdownMenu
 import com.ksxkq.cmm_clicker.ui.AppDropdownMenuItem
 import com.ksxkq.cmm_clicker.ui.CircleActionIconButton
-import com.ksxkq.cmm_clicker.ui.TaskLibraryPanel
 import com.ksxkq.cmm_clicker.ui.theme.AppThemeMode
 import com.ksxkq.cmm_clicker.ui.theme.CmmClickerTheme
 import com.ksxkq.cmm_clicker.ui.theme.ThemePreferenceStore
@@ -1680,60 +1679,64 @@ class TaskControlPanelGlobalOverlay(
 
     @Composable
     private fun SettingsTaskListPage() {
-        TaskLibraryPanel(
+        TaskControlSettingsTaskListPage(
             tasks = tasks,
             running = running,
-            taskOperationMessage = statusText,
-            onCreateTask = { name ->
-                scope.launch {
-                    withContext(Dispatchers.IO) {
-                        taskRepository.createTask(name = name, withTemplate = true)
-                    }
-                    loadTasks()
-                    statusText = "已新建任务"
-                    touchUi()
-                }
-            },
-            onTaskCardClick = { taskId -> openTaskEditorOverlay(taskId) },
-            onRenameTask = { taskId, name ->
-                scope.launch {
-                    withContext(Dispatchers.IO) {
-                        taskRepository.renameTask(taskId, name)
-                    }
-                    loadTasks()
-                    statusText = "已重命名"
-                    touchUi()
-                }
-            },
-            onDuplicateTask = { taskId ->
-                scope.launch {
-                    withContext(Dispatchers.IO) {
-                        taskRepository.duplicateTask(taskId)
-                    }
-                    loadTasks()
-                    statusText = "已复制任务"
-                    touchUi()
-                }
-            },
-            onDeleteTask = { taskId ->
-                scope.launch {
-                    withContext(Dispatchers.IO) {
-                        taskRepository.deleteTask(taskId)
-                    }
-                    if (selectedTaskId == taskId) {
-                        selectedTaskId = null
-                    }
-                    loadTasks()
-                    persistIds()
-                    statusText = "已删除任务"
-                    touchUi()
-                }
-            },
-            onRunTask = { },
-            showRunAction = false,
-            showManageMenu = true,
-            showCreateControls = true,
+            statusText = statusText,
+            onCreateTask = ::createTaskFromSettings,
+            onTaskCardClick = ::openTaskEditorOverlay,
+            onRenameTask = ::renameTaskFromSettings,
+            onDuplicateTask = ::duplicateTaskFromSettings,
+            onDeleteTask = ::deleteTaskFromSettings,
         )
+    }
+
+    private fun createTaskFromSettings(name: String) {
+        scope.launch {
+            withContext(Dispatchers.IO) {
+                taskRepository.createTask(name = name, withTemplate = true)
+            }
+            loadTasks()
+            statusText = "已新建任务"
+            touchUi()
+        }
+    }
+
+    private fun renameTaskFromSettings(taskId: String, name: String) {
+        scope.launch {
+            withContext(Dispatchers.IO) {
+                taskRepository.renameTask(taskId, name)
+            }
+            loadTasks()
+            statusText = "已重命名"
+            touchUi()
+        }
+    }
+
+    private fun duplicateTaskFromSettings(taskId: String) {
+        scope.launch {
+            withContext(Dispatchers.IO) {
+                taskRepository.duplicateTask(taskId)
+            }
+            loadTasks()
+            statusText = "已复制任务"
+            touchUi()
+        }
+    }
+
+    private fun deleteTaskFromSettings(taskId: String) {
+        scope.launch {
+            withContext(Dispatchers.IO) {
+                taskRepository.deleteTask(taskId)
+            }
+            if (selectedTaskId == taskId) {
+                selectedTaskId = null
+            }
+            loadTasks()
+            persistIds()
+            statusText = "已删除任务"
+            touchUi()
+        }
     }
 
     @Composable
@@ -2667,8 +2670,13 @@ class TaskControlPanelGlobalOverlay(
                 it.toNodeId == endNodeId &&
                 it.conditionType == EdgeConditionType.ALWAYS
         }
+        val endNodeIndex = flow.nodes.indexOfFirst { it.nodeId == endNodeId }
+        val updatedNodes = flow.nodes.toMutableList().apply {
+            val insertIndex = if (endNodeIndex >= 0) endNodeIndex else size
+            add(insertIndex, actionNode)
+        }
         val updatedFlow = flow.copy(
-            nodes = flow.nodes + actionNode,
+            nodes = updatedNodes,
             edges = retainedEdges +
                 FlowEdge(
                     edgeId = edgeAId,

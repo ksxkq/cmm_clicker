@@ -371,3 +371,11 @@ interface ActionPlugin {
    - 新增 `TaskControlPanelActionPresets.kt`，把“添加动作”菜单行为统一建模为 `AddActionPreset` 与应用函数
    - 新增 `TaskControlPanelActionPresetsTest`，验证五类动作新增后的节点类型与动作类型一致性
    - 页面层改为按预设遍历渲染菜单，减少重复分支与文案/行为不一致风险
+20. 任务列表页组件化补齐（阶段二-TaskList）：
+   - `SettingsTaskListPage` 的 UI 迁移为 `TaskControlSettingsTaskListPage`
+   - `TaskControlPanelGlobalOverlay` 保留任务 CRUD 的异步调度方法，通过回调注入 UI 组件
+   - 形成 `TaskList/ActionList/NodeEditor` 三页统一的“组件层 + 路由桥接层”结构
+21. 顺序主链兼容修复（阶段二-运行稳定性）：
+   - 编辑器 `TaskGraphEditorStore` 的顺序 `ALWAYS` 链重建改为 `START + 非 START/END + END`，避免 `END` 位于中间时提前终止主链
+   - 运行时 `FlowRuntimeEngine` 增加“仅在 `END` 后仍有可执行节点时”的执行前兜底规范化，修复存量异常任务的“只执行首动作”问题
+   - 录制追加动作时改为插入到 `END` 前，避免继续生成 `END` 后挂动作节点的结构性隐患

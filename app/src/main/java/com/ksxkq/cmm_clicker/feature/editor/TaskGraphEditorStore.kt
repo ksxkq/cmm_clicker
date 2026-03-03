@@ -581,12 +581,10 @@ class TaskGraphEditorStore(
             }
             .groupBy { edge -> edge.fromNodeId }
             .mapValues { (_, edges) -> edges.first() }
-        val rebuiltAlwaysEdges = flow.nodes
+        val sequentialNodes = buildSequentialExecutionNodes(flow.nodes)
+        val rebuiltAlwaysEdges = sequentialNodes
             .zipWithNext()
-            .mapNotNull { (from, to) ->
-                if (from.kind == NodeKind.END) {
-                    return@mapNotNull null
-                }
+            .map { (from, to) ->
                 val existing = existingAlwaysByFromNodeId[from.nodeId]
                 FlowEdge(
                     edgeId = existing?.edgeId ?: generateEdgeId(flow),
@@ -598,6 +596,24 @@ class TaskGraphEditorStore(
             }
         val normalizedEdges = preservedConditionalEdges + rebuiltAlwaysEdges
         return flow.copy(edges = normalizedEdges)
+    }
+
+    private fun buildSequentialExecutionNodes(nodes: List<FlowNode>): List<FlowNode> {
+        if (nodes.isEmpty()) {
+            return emptyList()
+        }
+        val start = nodes.firstOrNull { it.kind == NodeKind.START }
+        val end = nodes.firstOrNull { it.kind == NodeKind.END }
+        val middle = nodes.filter { it.kind != NodeKind.START && it.kind != NodeKind.END }
+        return buildList {
+            if (start != null) {
+                add(start)
+            }
+            addAll(middle)
+            if (end != null) {
+                add(end)
+            }
+        }
     }
 
     private fun generateNodeId(flow: TaskFlow): String {

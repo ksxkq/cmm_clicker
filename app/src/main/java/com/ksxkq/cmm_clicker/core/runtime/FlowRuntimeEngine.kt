@@ -28,7 +28,8 @@ class FlowRuntimeEngine(
         initialVariables: Map<String, Any?> = emptyMap(),
         traceCollector: RuntimeTraceCollector = InMemoryRuntimeTraceCollector(),
     ): RuntimeExecutionResult {
-        val validationIssues = validator.validate(bundle)
+        val normalizedBundle = normalizeBundleSequentialAlwaysEdges(bundle)
+        val validationIssues = validator.validate(normalizedBundle)
         val hasValidationErrors = validationIssues.any { it.severity == ValidationSeverity.ERROR }
         if (hasValidationErrors && options.stopOnValidationError) {
             return RuntimeExecutionResult(
@@ -42,7 +43,7 @@ class FlowRuntimeEngine(
         }
 
         val traceId = UUID.randomUUID().toString()
-        val entryFlow = bundle.findFlow(bundle.entryFlowId)
+        val entryFlow = normalizedBundle.findFlow(normalizedBundle.entryFlowId)
             ?: return RuntimeExecutionResult(
                 status = RuntimeExecutionStatus.FAILED,
                 traceId = traceId,
@@ -62,7 +63,7 @@ class FlowRuntimeEngine(
         var pointer: NodePointer? = NodePointer(entryFlow.flowId, entryFlow.entryNodeId)
         while (pointer != null && runtimeContext.step < options.maxSteps) {
             runtimeContext.currentPointer = pointer
-            val flow = bundle.findFlow(pointer.flowId)
+            val flow = normalizedBundle.findFlow(pointer.flowId)
                 ?: return fail(
                     runtimeContext = runtimeContext,
                     traceCollector = traceCollector,
@@ -312,6 +313,80 @@ class FlowRuntimeEngine(
             validationIssues = validationIssues,
             traceEvents = traceCollector.snapshot(),
         )
+    }
+
+    private fun normalizeBundleSequentialAlwaysEdges(bundle: TaskBundle): TaskBundle {
+        val normalizedFlows = bundle.flows.map { flow ->
+            if (shouldNormalizeSequentialAlwaysEdges(flow)) {
+                normalizeFlowSequentialAlwaysEdges(flow)
+            } else {
+                flow
+            }
+        }
+        return bundle.copy(flows = normalizedFlows)
+    }
+
+    private fun shouldNormalizeSequentialAlwaysEdges(flow: TaskFlow): Boolean {
+        val endIndex = flow.nodes.indexOfFirst { it.kind == NodeKind.END }
+        if (endIndex < 0) {
+            return false
+        }
+        return flow.nodes
+            .drop(endIndex + 1)
+            .any { it.kind != NodeKind.END }
+    }
+
+    private fun normalizeFlowSequentialAlwaysEdges(flow: TaskFlow): TaskFlow {
+        if (flow.nodes.isEmpty()) {
+            return flow.copy(edges = emptyList())
+        }
+        val validNodeIds = flow.nodes.map { it.nodeId }.toSet()
+        val preservedConditionalEdges = flow.edges.filter { edge ->
+            edge.conditionType != EdgeConditionType.ALWAYS &&
+                edge.fromNodeId in validNodeIds &&
+                edge.toNodeId in validNodeIds
+        }
+        val existingAlwaysByFromNodeId = flow.edges
+            .asSequence()
+            .filter { edge ->
+                edge.conditionType == EdgeConditionType.ALWAYS &&
+                    edge.fromNodeId in validNodeIds &&
+                    edge.toNodeId in validNodeIds
+            }
+            .groupBy { edge -> edge.fromNodeId }
+            .mapValues { (_, edges) -> edges.first() }
+        val sequentialNodes = buildSequentialExecutionNodes(flow.nodes)
+        val rebuiltAlwaysEdges = sequentialNodes
+            .zipWithNext()
+            .map { (from, to) ->
+                val existing = existingAlwaysByFromNodeId[from.nodeId]
+                FlowEdge(
+                    edgeId = existing?.edgeId ?: "runtime_auto_${flow.flowId}_${from.nodeId}_${to.nodeId}",
+                    fromNodeId = from.nodeId,
+                    toNodeId = to.nodeId,
+                    conditionType = EdgeConditionType.ALWAYS,
+                    priority = existing?.priority ?: 0,
+                )
+            }
+        return flow.copy(edges = preservedConditionalEdges + rebuiltAlwaysEdges)
+    }
+
+    private fun buildSequentialExecutionNodes(nodes: List<FlowNode>): List<FlowNode> {
+        if (nodes.isEmpty()) {
+            return emptyList()
+        }
+        val start = nodes.firstOrNull { it.kind == NodeKind.START }
+        val end = nodes.firstOrNull { it.kind == NodeKind.END }
+        val middle = nodes.filter { it.kind != NodeKind.START && it.kind != NodeKind.END }
+        return buildList {
+            if (start != null) {
+                add(start)
+            }
+            addAll(middle)
+            if (end != null) {
+                add(end)
+            }
+        }
     }
 
     private suspend fun executeActionNode(

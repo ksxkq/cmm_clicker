@@ -442,13 +442,50 @@
 373. 报告导出同步升级：`RuntimeRunReport` 的 `traceEvents` 导出已包含 `details`，按条复制 JSON 后可直接看到动作级参数与跳转信息。
 374. 测试补齐：`FlowRuntimeEngineTest` 新增 trace details 断言，`RuntimeRunReportTest` 新增 `details` JSON 序列化断言。
 375. 稳定性验证：以上“动作级 details 扩展”改造后再次通过 `testDebugUnitTest`、`assembleDebug` 与 `lintDebug`。
+376. 页面状态层拆分落地（第一阶段）：新增 `MainUiState` 与 `MainViewModel`，将首页主题切换、权限状态刷新、任务运行、运行报告复制/刷新等状态与业务逻辑从 `MainActivity` 迁出。
+377. Activity 职责收敛：`MainActivity` 仅保留 UI 绑定与系统页面跳转（无障碍设置页），其余任务入口与控制台操作统一委托给 `MainViewModel`。
+378. 路由参数瘦身：`MainTabsRoute` 移除首页不再使用的任务 CRUD 回调参数，保留“打开浮窗任务列表 + 控制台运行/调试”所需最小接口。
+379. 稳定性验证：以上“MainActivity 状态层拆分”改造后再次通过 `testDebugUnitTest` 与 `assembleDebug`。
+380. 浮窗大文件拆分（第二阶段-子模块）：新增 `TaskControlPanelGraphPreview.kt`，将动作列表连线与流程预览相关的绘制组件/布局计算（`JumpConnectionCanvas`、`buildJumpConnectionLayout`、`connectionGutterWidthDp` 等）从 `TaskControlPanelGlobalOverlay` 中抽离。
+381. 责任边界收敛：`TaskControlPanelGlobalOverlay` 保留业务状态与页面路由，图形连线与预览算法迁移为同包内独立组件，降低单文件耦合和回归影响面。
+382. 兼容策略：连线 lane 上限继续由 overlay 常量传入（`ACTION_LIST_MAX_VISIBLE_JUMP_LANES`），确保拆分前后的显示与交互参数一致。
+383. 稳定性验证：以上“图形预览组件拆分”改造后通过 `:app:compileDebugKotlin`（后续继续执行全量 `testDebugUnitTest/assembleDebug` 回归）。
+384. 编辑页面组件化继续推进：新增 `TaskControlPanelEditorPages.kt`，将 `SettingsActionListPage` 与 `SettingsNodeEditorPage` 的 Compose UI 主体迁移为独立组件（`TaskControlSettingsActionListPage`、`TaskControlSettingsNodeEditorPage`）。
+385. Overlay 逻辑收敛：`TaskControlPanelGlobalOverlay` 中对应页面函数改为薄封装，仅负责路由跳转与回调绑定（`mutate/persist/openNodeEditor/openClickPositionPicker`），不再承载大段 UI 绘制细节。
+386. 编辑工具函数复用：节点摘要、跳转摘要、时序摘要、参数解析与参数分组逻辑同步迁移到 `TaskControlPanelEditorPages.kt`，动作列表与节点编辑页共享同一套显示规则。
+387. 文件体积变化：`TaskControlPanelGlobalOverlay.kt` 从 4354 行降至 2851 行，图形与编辑 UI 分别下沉到 `TaskControlPanelGraphPreview.kt`（782 行）与 `TaskControlPanelEditorPages.kt`（763 行）。
+388. 稳定性验证：以上“编辑页组件抽离”改造后再次通过 `testDebugUnitTest` 与 `assembleDebug`。
+389. 编辑页状态容器化（首轮）：`TaskControlPanelEditorPages.kt` 新增 `ActionListUiState` 与 `JumpTargetPickerUiState`，统一承载动作列表菜单态（新增菜单/行内菜单/删除确认）与 Jump 目标选择菜单态。
+390. 状态挂载方式收敛：通过 `rememberActionListUiState(taskId, flowId)` 与 `rememberJumpTargetPickerUiState(nodeId)` 将页面局部状态与路由键绑定，避免状态变量在组件体内分散定义。
+391. 行为保持：状态容器化不改业务回调协议（仍由 overlay 桥接 `mutate/persist/openNodeEditor/openClickPositionPicker`），仅做 UI 状态组织重构。
+392. 稳定性验证：以上“状态容器化首轮”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+393. 参数草稿状态容器化：`TaskControlPanelEditorPages.kt` 新增 `NodeEditorDraftUiState`，集中管理节点编辑页的 `click X/Y` 输入草稿与通用参数输入草稿，替换字段内分散 `remember` 状态。
+394. 模型同步策略收敛：草稿值通过 `LaunchedEffect(nodeId + rawValue)` 与模型参数同步，保留“输入时可临时无效、模型仅在校验通过后写回”的原有交互语义。
+395. 草稿生命周期管理：新增 `retainParamDraftKeys`，在参数集合变化时清理无效草稿 key，避免跨动作/跨参数残留导致的状态污染。
+396. 稳定性验证：以上“参数草稿状态容器化”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+397. 状态模型文件化：新增 `TaskControlPanelEditorUiState.kt`，将 `ActionListUiState/JumpTargetPickerUiState/NodeEditorDraftUiState` 从页面文件中分离，形成可复用、可测试的编辑状态模型层。
+398. 组件测试补齐：新增 `TaskControlPanelEditorUiStateTest`，覆盖 `NodeEditorDraftUiState` 的关键行为（坐标草稿更新、参数草稿回退、草稿 key 保留/清理）。
+399. 可维护性提升：`TaskControlPanelEditorPages.kt` 仅保留页面组合与 `remember...UiState` 绑定，状态实现细节下沉到独立文件，减少 UI 文件职责混杂。
+400. 稳定性验证：以上“状态模型文件化 + 单测补齐”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+401. 参数分组逻辑可测试化：新增 `TaskControlPanelEditorParamSections.kt`，将节点编辑页的“参数过滤 + 分组映射”提炼为独立函数（`buildNodeEditorParamsSnapshot/groupNodeEditorParams/paramEditorGroupForKey`）。
+402. 视图层回归测试补齐：新增 `TaskControlPanelEditorParamSectionsTest`，覆盖 `CLICK` 坐标字段过滤、`JUMP` 目标字段过滤、参数分组映射（`POSITION/TIMING/TARGET/BEHAVIOR/ADVANCED`）等核心规则。
+403. 页面层调用收敛：`TaskControlPanelEditorPages.kt` 改为复用上述参数函数，不再内联参数过滤/分组细节，降低页面重构时的逻辑漂移风险。
+404. 稳定性验证：以上“参数分组逻辑提取 + 视图层回归测试”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+405. 交互逻辑可测试化：新增 `TaskControlPanelEditorInteractionLogic.kt`，提炼跳转目标解析与坐标换算逻辑（`resolveJumpTargetFlowId/resolveJumpTargetNodeId/defaultJumpTargetNodeId/ratioToPixel/pixelInputToRatioOrNull`）。
+406. 页面交互调用收敛：`TaskControlPanelEditorPages.kt` 中 Jump 目标选择与 CLICK 像素输入写回，统一调用交互逻辑函数，移除页面内联计算分支。
+407. 交互回归测试补齐：新增 `TaskControlPanelEditorInteractionLogicTest`，覆盖“跳转目标默认解析”和“像素输入边界钳制/非法输入”关键路径。
+408. 稳定性验证：以上“交互逻辑提取 + 回归测试”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+409. 添加动作逻辑可测试化：新增 `TaskControlPanelActionPresets.kt`，将动作菜单的 5 个新增分支抽象为 `AddActionPreset` + `applyAddActionPreset`，统一“菜单文案/成功文案/编辑器变更”映射。
+410. 页面菜单调用收敛：`TaskControlPanelEditorPages.kt` 中“添加动作”下拉菜单改为遍历 `AddActionPreset.entries`，避免重复分支与文案漂移。
+411. 交互单测补齐：新增 `TaskControlPanelActionPresetsTest`，覆盖 `CLICK/SWIPE/RECORD/DUP_CLICK/JUMP` 五类新增动作后节点 `kind/actionType` 的预期结果。
+412. 稳定性验证：以上“添加动作预设提取 + 单测”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
 
 ## 3. 正在进行
 
 1. 全局操作面板实机交互打磨（录制态按钮间距/状态文案/误触控制、开始执行确认链路与动效、录制提示层反馈）。
 2. 调试面板前置能力推进：基于已落地的运行历史列表，继续补齐筛选、搜索、分页与分享链路。
-3. 继续推进页面状态层拆分：`MainActivity` -> `ViewModel + Route state`，让任务/控制台各自拥有独立状态模型。
-4. 编辑页组件化：从 `TaskControlPanelGlobalOverlay` 提取共享 `ActionList/NodeEditor` 组件，降低页面文件体积与耦合。
+3. 继续推进页面状态层拆分第二阶段：把 `TaskControlPanelGlobalOverlay` 的编辑/运行状态进一步拆成可复用状态模型与控制器，降低超长文件维护成本（已先完成图形预览子模块抽离）。
+4. 编辑页组件化：`ActionList/NodeEditor`、草稿状态容器、参数分组、交互逻辑、动作新增预设提取及对应单测已完成；本阶段进入收尾，可转入实机联调与体验回归。
 5. 录制多指会话实机打磨（手指数上限、停顿阈值、不同机型采样密度）。
 6. 首页任务入口已收敛为单按钮，后续观察是否需要在首页增加“最近任务摘要”只读信息（不引入第二条编辑路径）。
 
@@ -459,7 +496,7 @@
 3. Branch 条件模型扩展（支持更多条件源配置）。
 4. 流程图交互增强：预览布局持久化（当前为会话内）与连线信息密度优化。
 5. 导入/迁移链在任务体验稳定后接入（`LegacyIR -> migrateToLatest`）。
-6. UI 架构继续分层：引入 `RouteState`/`UIIntent`，减少 Activity 中业务判断。
+6. UI 架构继续分层：评估引入 `RouteState`/`UIIntent`，统一首页与浮窗编辑链路的状态意图表达。
 7. 录制动作编辑二期：多指 stroke 可视化编辑与参数微调（统一在任务编辑页承载）。
 
 ## 5. 风险与注意事项

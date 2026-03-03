@@ -40,7 +40,6 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.ksxkq.cmm_clicker.feature.debug.RuntimeRunReportSummary
-import com.ksxkq.cmm_clicker.feature.task.TaskRecord
 import com.ksxkq.cmm_clicker.ui.theme.AppThemeMode
 
 enum class MainTab(val label: String) {
@@ -51,7 +50,6 @@ enum class MainTab(val label: String) {
 @Composable
 fun MainTabsRoute(
     themeMode: AppThemeMode,
-    tasks: List<TaskRecord>,
     taskOperationMessage: String,
     running: Boolean,
     activeTaskName: String,
@@ -68,12 +66,7 @@ fun MainTabsRoute(
     runtimeReportMessage: String,
     runtimeReportHistory: List<RuntimeRunReportSummary>,
     onThemeModeToggle: () -> Unit,
-    onCreateTask: (String) -> Unit,
     onOpenTaskOverlay: (String) -> Unit,
-    onRenameTask: (String, String) -> Unit,
-    onDuplicateTask: (String) -> Unit,
-    onDeleteTask: (String) -> Unit,
-    onRunTask: (String) -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
     onAutoEnableAccessibility: () -> Unit,
     onRefreshStatus: () -> Unit,

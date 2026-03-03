@@ -335,3 +335,39 @@ interface ActionPlugin {
 10. 动作级 trace 细节补齐：
    - `RuntimeTraceEvent` 新增 `details` 字段，承载动作级上下文（参数摘要、下一跳、postDelay、actionResult 状态/错误码）
    - 导出的运行报告 JSON 会原样携带 `traceEvents.details`，后续排查可直接还原“每一步发生了什么、为何跳到下一步”
+11. 首页状态层拆分（阶段一）：
+   - 新增 `MainUiState + MainViewModel`，把主题、权限、任务运行、运行报告历史等状态从 `MainActivity` 剥离
+   - `MainActivity` 收敛为“Compose 容器 + 系统跳转入口”，避免业务状态继续堆叠在 Activity 生命周期内
+   - 该拆分为后续 `TaskControlPanelGlobalOverlay` 进一步组件化与状态抽离提供统一模式
+12. 浮窗编辑器组件化（阶段二-子模块）：
+   - 新增 `TaskControlPanelGraphPreview.kt`，承载流程预览与动作列表连线绘制能力（`FlowPreviewPanel/JumpConnectionCanvas` 及其 lane 布局算法）
+   - `TaskControlPanelGlobalOverlay` 保留路由与业务状态，图形渲染逻辑解耦为独立组件，降低单文件复杂度与后续改动冲突概率
+   - 连线参数继续由 overlay 传入（例如最大可见 lane），确保拆分后视觉行为保持一致
+13. 浮窗编辑器组件化（阶段二-编辑页）：
+   - 新增 `TaskControlPanelEditorPages.kt`，承载 `ActionList/NodeEditor` 的主要 Compose UI 结构与编辑辅助函数
+   - `TaskControlPanelGlobalOverlay` 中对应页面函数降级为“状态/路由桥接层”，仅绑定回调，不再承载大段 UI 细节
+   - 通过“桥接层 + 组件层”分工，为下一步状态容器化（菜单态/草稿态/删除确认态）做准备
+14. 编辑页状态容器化（阶段二-首轮）：
+   - 在 `TaskControlPanelEditorPages.kt` 增加 `ActionListUiState` 与 `JumpTargetPickerUiState`，集中管理动作列表和 Jump 选择交互状态
+   - 通过 `remember...UiState(key)` 机制将状态生命周期与 `task/flow/node` 路由键对齐，减少分散 `mutableStateOf` 带来的状态漂移风险
+   - 下一步继续下沉参数草稿态（输入框草稿、坐标草稿）并补充单元测试/快照测试
+15. 编辑页状态容器化（阶段二-草稿态）：
+   - 新增 `NodeEditorDraftUiState`，统一管理 `CLICK` 坐标草稿与参数输入草稿，减少节点编辑页字段内重复 `remember` 逻辑
+   - 草稿通过 `LaunchedEffect(nodeId + rawValue)` 与模型同步，保持“草稿可暂存无效值、模型只接收校验通过值”的写回约束
+   - 参数 key 生命周期增加清理机制（`retainParamDraftKeys`），避免切换节点/参数集合时旧草稿泄漏
+16. 编辑状态模型可测试化（阶段二-测试补齐）：
+   - 新增 `TaskControlPanelEditorUiState.kt`，将编辑状态模型与页面组合层解耦
+   - 新增 `TaskControlPanelEditorUiStateTest`，验证 `NodeEditorDraftUiState` 的草稿更新与清理规则
+   - 目标是先稳定“状态层正确性”，后续再补视图层回归测试，降低 UI 重构风险
+17. 参数编辑规则可测试化（阶段二-视图规则）：
+   - 新增 `TaskControlPanelEditorParamSections.kt`，承载参数过滤与分组规则（例如 `CLICK` 隐藏 `x/y`，`JUMP` 隐藏 `targetFlowId/targetNodeId`）
+   - 新增 `TaskControlPanelEditorParamSectionsTest`，覆盖过滤与分组映射的关键路径，避免页面重构时规则回归
+   - 页面层改为调用规则函数，形成“规则层 + 组合层”分工
+18. 编辑交互规则可测试化（阶段二-交互规则）：
+   - 新增 `TaskControlPanelEditorInteractionLogic.kt`，沉淀跳转目标默认解析与坐标输入边界换算规则
+   - 新增 `TaskControlPanelEditorInteractionLogicTest`，覆盖“跳转联动默认值”和“像素输入边界钳制”回归
+   - 页面层改为复用交互规则函数，进一步减少 UI 组合层中隐式业务判断
+19. 动作新增预设可测试化（阶段二-菜单逻辑）：
+   - 新增 `TaskControlPanelActionPresets.kt`，把“添加动作”菜单行为统一建模为 `AddActionPreset` 与应用函数
+   - 新增 `TaskControlPanelActionPresetsTest`，验证五类动作新增后的节点类型与动作类型一致性
+   - 页面层改为按预设遍历渲染菜单，减少重复分支与文案/行为不一致风险

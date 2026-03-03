@@ -79,6 +79,7 @@ class FlowRuntimeEngine(
                     validationIssues = validationIssues,
                 )
 
+            runtimeContext.lastActionResult = null
             traceCollector.add(
                 RuntimeTraceEvent(
                     traceId = traceId,
@@ -87,6 +88,7 @@ class FlowRuntimeEngine(
                     nodeId = node.nodeId,
                     nodeKind = node.kind,
                     phase = RuntimeTracePhase.NODE_START,
+                    details = buildNodeStartDetails(node),
                 ),
             )
 
@@ -101,6 +103,11 @@ class FlowRuntimeEngine(
                         nodeKind = node.kind,
                         phase = RuntimeTracePhase.NODE_END,
                         message = "node_skipped",
+                        details = mapOf(
+                            "skipReason" to "node_disabled_or_inactive",
+                            "nextFlowId" to (skipped?.flowId ?: "-"),
+                            "nextNodeId" to (skipped?.nodeId ?: "-"),
+                        ),
                     ),
                 )
                 pointer = skipped
@@ -189,6 +196,12 @@ class FlowRuntimeEngine(
                             nodeKind = node.kind,
                             phase = RuntimeTracePhase.NODE_END,
                             message = outcome.message ?: "completed",
+                            details = buildNodeEndDetails(
+                                node = node,
+                                outcome = outcome,
+                                postDelayMs = 0L,
+                                actionResult = runtimeContext.lastActionResult,
+                            ),
                         ),
                     )
                     return RuntimeExecutionResult(
@@ -224,6 +237,12 @@ class FlowRuntimeEngine(
                             } else {
                                 outcome.message
                             },
+                            details = buildNodeEndDetails(
+                                node = node,
+                                outcome = outcome,
+                                postDelayMs = postDelayMs,
+                                actionResult = runtimeContext.lastActionResult,
+                            ),
                         ),
                     )
                     pointer = outcome.next
@@ -237,6 +256,7 @@ class FlowRuntimeEngine(
                         pointer = pointer,
                         message = outcome.message ?: "node_failed",
                         validationIssues = validationIssues,
+                        nodeKind = node.kind,
                     )
                 }
 
@@ -250,6 +270,12 @@ class FlowRuntimeEngine(
                             nodeKind = node.kind,
                             phase = RuntimeTracePhase.NODE_END,
                             message = outcome.message ?: "stopped",
+                            details = buildNodeEndDetails(
+                                node = node,
+                                outcome = outcome,
+                                postDelayMs = 0L,
+                                actionResult = runtimeContext.lastActionResult,
+                            ),
                         ),
                     )
                     return RuntimeExecutionResult(
@@ -445,18 +471,33 @@ class FlowRuntimeEngine(
         pointer: NodePointer?,
         message: String,
         validationIssues: List<com.ksxkq.cmm_clicker.core.model.GraphValidationIssue>,
+        nodeKind: NodeKind = NodeKind.ACTION,
     ): RuntimeExecutionResult {
         val current = runtimeContext.currentPointer ?: pointer
         if (current != null) {
+            val actionResult = runtimeContext.lastActionResult
             traceCollector.add(
                 RuntimeTraceEvent(
                     traceId = runtimeContext.traceId,
                     step = runtimeContext.step,
                     flowId = current.flowId,
                     nodeId = current.nodeId,
-                    nodeKind = NodeKind.ACTION,
+                    nodeKind = nodeKind,
                     phase = RuntimeTracePhase.NODE_ERROR,
                     message = message,
+                    details = linkedMapOf<String, String>().apply {
+                        put("errorCode", inferErrorCode(message))
+                        put("rawMessage", message)
+                        actionResult?.let { result ->
+                            put("actionStatus", result.status.name)
+                            put("actionErrorCode", result.errorCode ?: "-")
+                            put("actionMessage", result.message ?: "-")
+                            put(
+                                "actionPayloadKeys",
+                                if (result.payload.isEmpty()) "-" else result.payload.keys.sorted().joinToString(","),
+                            )
+                        }
+                    },
                 ),
             )
         }
@@ -469,6 +510,61 @@ class FlowRuntimeEngine(
             validationIssues = validationIssues,
             traceEvents = traceCollector.snapshot(),
         )
+    }
+
+    private fun buildNodeStartDetails(node: FlowNode): Map<String, String> {
+        return linkedMapOf<String, String>().apply {
+            put("enabled", node.flags.enabled.toString())
+            put("active", node.flags.active.toString())
+            put("actionType", node.actionType?.raw ?: "-")
+            put("params", compactParams(node.params))
+        }
+    }
+
+    private fun buildNodeEndDetails(
+        node: FlowNode,
+        outcome: NodeOutcome,
+        postDelayMs: Long,
+        actionResult: ActionResult?,
+    ): Map<String, String> {
+        return linkedMapOf<String, String>().apply {
+            put("nodeKind", node.kind.name)
+            put("outcome", outcome.status.name)
+            put("nextFlowId", outcome.next?.flowId ?: "-")
+            put("nextNodeId", outcome.next?.nodeId ?: "-")
+            put("postDelayMs", postDelayMs.toString())
+            if (actionResult != null) {
+                put("actionStatus", actionResult.status.name)
+                put("actionErrorCode", actionResult.errorCode ?: "-")
+                put("actionMessage", actionResult.message ?: "-")
+                put(
+                    "actionPayloadKeys",
+                    if (actionResult.payload.isEmpty()) "-" else actionResult.payload.keys.sorted().joinToString(","),
+                )
+            }
+        }
+    }
+
+    private fun compactParams(params: Map<String, Any?>): String {
+        if (params.isEmpty()) {
+            return "{}"
+        }
+        val raw = params
+            .toSortedMap()
+            .entries
+            .joinToString(separator = ", ") { (key, value) ->
+                "$key=${value?.toString()?.replace("\n", "\\n") ?: "null"}"
+            }
+        return if (raw.length > 360) {
+            raw.take(357) + "..."
+        } else {
+            raw
+        }
+    }
+
+    private fun inferErrorCode(message: String): String {
+        val candidate = message.substringBefore(':').substringBefore('|').trim()
+        return candidate.ifBlank { "runtime_failed" }
     }
 }
 

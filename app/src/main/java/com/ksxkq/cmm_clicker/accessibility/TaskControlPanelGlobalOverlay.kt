@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PixelFormat
+import android.os.Build
 import android.os.SystemClock
 import android.util.Log
 import android.view.Gravity
@@ -122,11 +123,13 @@ import com.ksxkq.cmm_clicker.core.model.TaskBundle
 import com.ksxkq.cmm_clicker.core.model.TaskFlow
 import com.ksxkq.cmm_clicker.core.runtime.FlowRuntimeEngine
 import com.ksxkq.cmm_clicker.core.runtime.RuntimeEngineOptions
+import com.ksxkq.cmm_clicker.core.runtime.RuntimeRunReport
 import com.ksxkq.cmm_clicker.feature.editor.EditorParamSchemaRegistry
 import com.ksxkq.cmm_clicker.feature.editor.EditorParamValidator
 import com.ksxkq.cmm_clicker.feature.editor.ParamFieldDefinition
 import com.ksxkq.cmm_clicker.feature.editor.TaskGraphEditorState
 import com.ksxkq.cmm_clicker.feature.editor.TaskGraphEditorStore
+import com.ksxkq.cmm_clicker.feature.debug.RuntimeRunReportRepository
 import com.ksxkq.cmm_clicker.feature.task.LocalFileTaskRepository
 import com.ksxkq.cmm_clicker.feature.task.TaskRecord
 import com.ksxkq.cmm_clicker.ui.AppDropdownMenu
@@ -212,6 +215,7 @@ class TaskControlPanelGlobalOverlay(
 
     private val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private val taskRepository = LocalFileTaskRepository(context)
+    private val runtimeRunReportRepository = RuntimeRunReportRepository(context)
     private val themePreferenceStore = ThemePreferenceStore(context)
     private val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
 
@@ -399,7 +403,7 @@ class TaskControlPanelGlobalOverlay(
             gravity = Gravity.TOP or Gravity.START
             x = panelOffsetX
             y = panelOffsetY
-            layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            applyCutoutModeIfSupported(this)
         }
         try {
             windowManager.addView(compose, params)
@@ -458,7 +462,7 @@ class TaskControlPanelGlobalOverlay(
             gravity = Gravity.TOP or Gravity.START
             x = 0
             y = 0
-            layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            applyCutoutModeIfSupported(this)
         }
         try {
             windowManager.addView(compose, params)
@@ -689,11 +693,11 @@ class TaskControlPanelGlobalOverlay(
         if (params.gravity != (Gravity.TOP or Gravity.START)) {
             return
         }
-        val bounds = windowManager.currentWindowMetrics.bounds
+        val (screenWidth, screenHeight) = currentScreenSizePx()
         val panelWidth = if (view.width > 0) view.width else dp(188)
         val panelHeight = if (view.height > 0) view.height else dp(64)
-        val maxX = (bounds.width() - panelWidth).coerceAtLeast(0)
-        val maxY = (bounds.height() - panelHeight).coerceAtLeast(0)
+        val maxX = (screenWidth - panelWidth).coerceAtLeast(0)
+        val maxY = (screenHeight - panelHeight).coerceAtLeast(0)
         panelOffsetX = (panelOffsetX + deltaX.roundToInt()).coerceIn(0, maxX)
         panelOffsetY = (panelOffsetY + deltaY.roundToInt()).coerceIn(0, maxY)
         params.x = panelOffsetX
@@ -1498,9 +1502,7 @@ class TaskControlPanelGlobalOverlay(
 
     @Composable
     private fun ClickPositionPickerLayer() {
-        val bounds = windowManager.currentWindowMetrics.bounds
-        val width = bounds.width().coerceAtLeast(1)
-        val height = bounds.height().coerceAtLeast(1)
+        val (width, height) = currentScreenSizePx()
         val maxX = (width - 1).coerceAtLeast(0).toFloat()
         val maxY = (height - 1).coerceAtLeast(0).toFloat()
         val pickerX = clickPickerX.coerceIn(0f, maxX)
@@ -3267,8 +3269,14 @@ class TaskControlPanelGlobalOverlay(
     }
 
     private fun currentScreenSizePx(): Pair<Int, Int> {
-        val bounds = windowManager.currentWindowMetrics.bounds
-        return bounds.width().coerceAtLeast(1) to bounds.height().coerceAtLeast(1)
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val bounds = windowManager.currentWindowMetrics.bounds
+            bounds.width().coerceAtLeast(1) to bounds.height().coerceAtLeast(1)
+        } else {
+            val displayMetrics = context.resources.displayMetrics
+            displayMetrics.widthPixels.coerceAtLeast(1) to
+                displayMetrics.heightPixels.coerceAtLeast(1)
+        }
     }
 
     private fun openClickPositionPicker(nodeId: String, xRatio: Double, yRatio: Double) {
@@ -3367,49 +3375,61 @@ class TaskControlPanelGlobalOverlay(
         runTaskJob = scope.launch {
             val launchJob = this
             try {
-            val candidateTaskId = resolveCandidateTaskId()
-            if (candidateTaskId == null) {
-                statusText = "没有可执行任务"
+                val candidateTaskId = resolveCandidateTaskId()
+                if (candidateTaskId == null) {
+                    statusText = "没有可执行任务"
+                    touchUi()
+                    return@launch
+                }
+                val task = withContext(Dispatchers.IO) { taskRepository.getTask(candidateTaskId) }
+                if (task == null) {
+                    statusText = "任务不存在，无法执行"
+                    touchUi()
+                    return@launch
+                }
+                selectedTaskId = task.taskId
+                lastStartedTaskId = task.taskId
+                persistIds()
+                running = true
+                statusText = "运行中..."
                 touchUi()
-                return@launch
-            }
-            val task = withContext(Dispatchers.IO) { taskRepository.getTask(candidateTaskId) }
-            if (task == null) {
-                statusText = "任务不存在，无法执行"
-                touchUi()
-                return@launch
-            }
-            selectedTaskId = task.taskId
-            lastStartedTaskId = task.taskId
-            persistIds()
-            running = true
-            statusText = "运行中..."
-            touchUi()
-            val result = withContext(Dispatchers.Default) {
-                FlowRuntimeEngine(
-                    options = RuntimeEngineOptions(
-                        dryRun = false,
-                        maxSteps = 200,
-                        stopOnValidationError = true,
-                    ),
-                ).execute(task.bundle)
-            }
-            val summary = buildString {
-                append("模式=REAL ")
-                append("状态=${result.status} ")
-                append("step=${result.stepCount} ")
-                append("msg=${result.message ?: "-"}")
-            }
-            withContext(Dispatchers.IO) {
-                taskRepository.updateTaskRunInfo(
+                val startedAtMs = System.currentTimeMillis()
+                val result = withContext(Dispatchers.Default) {
+                    FlowRuntimeEngine(
+                        options = RuntimeEngineOptions(
+                            dryRun = false,
+                            maxSteps = 200,
+                            stopOnValidationError = true,
+                        ),
+                    ).execute(task.bundle)
+                }
+                val finishedAtMs = System.currentTimeMillis()
+                val summary = buildString {
+                    append("模式=REAL ")
+                    append("状态=${result.status} ")
+                    append("step=${result.stepCount} ")
+                    append("msg=${result.message ?: "-"}")
+                }
+                val report = RuntimeRunReport.fromExecution(
+                    source = "control_panel_overlay",
                     taskId = task.taskId,
-                    status = result.status.name,
-                    summary = summary,
+                    taskName = task.name,
+                    dryRun = false,
+                    startedAtEpochMs = startedAtMs,
+                    finishedAtEpochMs = finishedAtMs,
+                    result = result,
                 )
-            }
-            loadTasks()
-            statusText = summary
-            touchUi()
+                withContext(Dispatchers.IO) {
+                    runCatching { runtimeRunReportRepository.append(report) }
+                    taskRepository.updateTaskRunInfo(
+                        taskId = task.taskId,
+                        status = result.status.name,
+                        summary = summary,
+                    )
+                }
+                loadTasks()
+                statusText = summary
+                touchUi()
             } catch (_: CancellationException) {
                 statusText = "任务已停止"
                 touchUi()
@@ -3650,7 +3670,7 @@ class TaskControlPanelGlobalOverlay(
             gravity = Gravity.TOP or Gravity.START
             x = 0
             y = 0
-            layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            applyCutoutModeIfSupported(this)
         }
 
         hintView.setOnTouchListener { _, event ->
@@ -3858,9 +3878,7 @@ class TaskControlPanelGlobalOverlay(
         if (tracks.isEmpty()) {
             return null
         }
-        val metrics = windowManager.currentWindowMetrics.bounds
-        val width = metrics.width().coerceAtLeast(1)
-        val height = metrics.height().coerceAtLeast(1)
+        val (width, height) = currentScreenSizePx()
         val sessionStart = gestureSessionStartTimeMs
             .takeIf { it > 0L }
             ?: tracks.minOf { it.downTimeMs }
@@ -4063,10 +4081,17 @@ class TaskControlPanelGlobalOverlay(
             (last.first - first.first).toDouble(),
             (last.second - first.second).toDouble(),
         )
-        val bounds = windowManager.currentWindowMetrics.bounds
-        val baseSize = minOf(bounds.width(), bounds.height()).coerceAtLeast(1)
+        val (screenWidth, screenHeight) = currentScreenSizePx()
+        val baseSize = minOf(screenWidth, screenHeight).coerceAtLeast(1)
         val clickDistanceRatio = dp(18).toDouble() / baseSize.toDouble()
         return distance <= clickDistanceRatio
+    }
+
+    private fun applyCutoutModeIfSupported(params: WindowManager.LayoutParams) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            params.layoutInDisplayCutoutMode =
+                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+        }
     }
 
     private fun isTouchWithinPanel(rawX: Float, rawY: Float): Boolean {

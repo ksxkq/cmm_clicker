@@ -9,6 +9,7 @@ import com.ksxkq.cmm_clicker.core.model.TaskBundle
 import com.ksxkq.cmm_clicker.core.model.TaskFlow
 import com.ksxkq.cmm_clicker.core.runSuspend
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -241,5 +242,63 @@ class FlowRuntimeEngineTest {
             .map { it.nodeId }
         assertTrue(startedNodes.contains("trueNode"))
         assertTrue(!startedNodes.contains("falseNode"))
+    }
+
+    @Test
+    fun `trace details should include action level debug fields`() {
+        val flow = TaskFlow(
+            flowId = "main",
+            name = "main",
+            entryNodeId = "start",
+            nodes = listOf(
+                FlowNode(nodeId = "start", kind = NodeKind.START),
+                FlowNode(
+                    nodeId = "clickNode",
+                    kind = NodeKind.ACTION,
+                    actionType = ActionType.CLICK,
+                    params = mapOf(
+                        "x" to "0.6",
+                        "y" to "0.4",
+                        "durationMs" to 80,
+                        "postDelayMs" to 120,
+                    ),
+                ),
+                FlowNode(nodeId = "end", kind = NodeKind.END),
+            ),
+            edges = listOf(
+                FlowEdge(edgeId = "e1", fromNodeId = "start", toNodeId = "clickNode"),
+                FlowEdge(edgeId = "e2", fromNodeId = "clickNode", toNodeId = "end"),
+            ),
+        )
+        val bundle = TaskBundle(
+            bundleId = "bundle_debug_fields",
+            name = "trace details test",
+            schemaVersion = 1,
+            entryFlowId = "main",
+            flows = listOf(flow),
+        )
+
+        val result = runSuspend {
+            FlowRuntimeEngine(
+                options = RuntimeEngineOptions(dryRun = true),
+            ).execute(bundle = bundle)
+        }
+
+        val startEvent = result.traceEvents.firstOrNull {
+            it.nodeId == "clickNode" && it.phase == RuntimeTracePhase.NODE_START
+        }
+        assertNotNull(startEvent)
+        assertEquals("click", startEvent!!.details["actionType"])
+        assertTrue(startEvent.details["params"]?.contains("x=0.6") == true)
+
+        val endEvent = result.traceEvents.firstOrNull {
+            it.nodeId == "clickNode" && it.phase == RuntimeTracePhase.NODE_END
+        }
+        assertNotNull(endEvent)
+        assertEquals("CONTINUE", endEvent!!.details["outcome"])
+        assertEquals("SUCCESS", endEvent.details["actionStatus"])
+        assertEquals("120", endEvent.details["postDelayMs"])
+        assertEquals("main", endEvent.details["nextFlowId"])
+        assertEquals("end", endEvent.details["nextNodeId"])
     }
 }

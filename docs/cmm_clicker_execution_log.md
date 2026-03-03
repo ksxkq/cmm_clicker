@@ -423,11 +423,30 @@
 354. 编辑器主链一致性修复：`TaskGraphEditorStore` 在 `init/reset/updateFlow` 时统一执行 flow 归一化，自动重建 `ALWAYS` 边为“当前节点顺序的串联链”（`START -> ... -> END`），防止出现未挂到主链的孤立动作。
 355. 条件边保留策略：归一化仅重建 `ALWAYS` 边；`TRUE/FALSE` 等条件边在来源/目标节点仍存在时会原样保留，避免分支逻辑被误删。
 356. 回归测试补齐：`TaskGraphEditorStoreTest` 新增主链归一化断言与初始化归一化测试，并在新增/复制/删除/分支编辑用例里校验 `ALWAYS` 串联；本轮再次通过 `testDebugUnitTest` 与 `assembleDebug`。
+357. Lint 阻断项清零：`TaskControlPanelGlobalOverlay` 的窗口参数与屏幕尺寸读取补齐 API 版本保护（`layoutInDisplayCutoutMode` 仅在 API 28+ 设置，`currentWindowMetrics` 仅在 API 30+ 使用并提供低版本回退），消除 `NewApi` 错误。
+358. 主题样式兼容修复：`themes.xml` 中按钮样式由 `android:paddingHorizontal` 改为 `android:paddingStart/paddingEnd`，兼容 `minSdk=24` 并保持同等视觉内边距语义。
+359. Manifest Lint 策略显式化：`WRITE_SECURE_SETTINGS` 权限声明补充 `tools:ignore="ProtectedPermissions"`，明确该权限仅用于 ADB/系统签名调试链路，避免 lint 作为构建错误阻断。
+360. 稳定性验证：以上 lint 修复后再次通过 `./gradlew lintDebug`（`BUILD SUCCESSFUL`）。
+361. 运行报告结构化落地：新增 `RuntimeRunReport`（schema v1），统一封装 `traceId/source/taskId/taskName/status/stepCount/message/errorCode/validationIssues/traceEvents`，并提供 JSON 编码能力用于调试导出。
+362. 运行报告持久化仓库落地：新增 `RuntimeRunReportRepository`，按 NDJSON 方式落盘 `runtime_run_reports_v1.ndjson`（保留最近 120 条），支持读取最近一条 JSON 供外部复制与排查。
+363. 运行入口接入统一报告链路：`MainActivity` 的“运行当前任务”与 `TaskControlPanelGlobalOverlay` 的“开始任务”均在执行完成后写入结构化运行报告，覆盖首页与浮窗两条执行路径。
+364. 控制台导出入口补齐：控制台“流程运行”区域新增“复制最近运行报告(JSON)”按钮，支持把最近一次结构化报告复制到系统剪贴板；用于后续调试面板和问题回传。
+365. 稳定性验证：以上“运行报告结构化 + 导出入口”改造后再次通过 `testDebugUnitTest`、`assembleDebug` 与 `lintDebug`。
+366. 运行历史可视化补齐：控制台新增“运行历史（调试）”区块，展示最近结构化报告列表（时间、任务、状态、错误码、来源、摘要、step/耗时），可直观看到多次运行记录而不必手读 JSON。
+367. 调试交互补齐：历史区新增“刷新运行历史”“复制最近一条”及“按条复制该条 JSON”操作，便于快速复现与问题回传。
+368. 报告仓库读能力补齐：`RuntimeRunReportRepository` 新增按 `reportId` 查询原始 JSON 与最近摘要列表查询，支持 UI 历史展示与按条复制。
+369. 主页面状态同步补齐：`MainActivity` 新增运行报告历史 state，并在 `onCreate/onResume/执行完成后` 自动刷新；浮窗写入报告后回到首页也可看到最新历史。
+370. 稳定性验证：以上“运行历史可视化 + 仓库查询能力”改造后再次通过 `testDebugUnitTest`、`assembleDebug` 与 `lintDebug`。
+371. 动作级排查信息加密度：`RuntimeTraceEvent` 新增结构化 `details` 字段，记录每步动作的关键调试信息（`actionType/params 摘要/outcome/nextFlowId/nextNodeId/postDelayMs/actionStatus/actionErrorCode/actionMessage`），不再只依赖 `message` 字符串。
+372. 失败事件错误码标准化：运行失败事件会在 `details.errorCode` 写入归一化错误码（从 message 提取），并保留 `rawMessage` 与 action 执行结果摘要，便于快速定位失败类型。
+373. 报告导出同步升级：`RuntimeRunReport` 的 `traceEvents` 导出已包含 `details`，按条复制 JSON 后可直接看到动作级参数与跳转信息。
+374. 测试补齐：`FlowRuntimeEngineTest` 新增 trace details 断言，`RuntimeRunReportTest` 新增 `details` JSON 序列化断言。
+375. 稳定性验证：以上“动作级 details 扩展”改造后再次通过 `testDebugUnitTest`、`assembleDebug` 与 `lintDebug`。
 
 ## 3. 正在进行
 
 1. 全局操作面板实机交互打磨（录制态按钮间距/状态文案/误触控制、开始执行确认链路与动效、录制提示层反馈）。
-2. 把“运行 trace 与错误码”沉淀为可导出日志结构，为调试面板打基础。
+2. 调试面板前置能力推进：基于已落地的运行历史列表，继续补齐筛选、搜索、分页与分享链路。
 3. 继续推进页面状态层拆分：`MainActivity` -> `ViewModel + Route state`，让任务/控制台各自拥有独立状态模型。
 4. 编辑页组件化：从 `TaskControlPanelGlobalOverlay` 提取共享 `ActionList/NodeEditor` 组件，降低页面文件体积与耦合。
 5. 录制多指会话实机打磨（手指数上限、停顿阈值、不同机型采样密度）。

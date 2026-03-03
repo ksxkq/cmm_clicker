@@ -325,3 +325,13 @@ interface ActionPlugin {
    - `TaskGraphEditorStore` 在初始化、reset、flow 更新时会统一执行主链归一化
    - 归一化策略：仅重建 `ALWAYS` 顺序边（`START -> ... -> END`），保留有效的条件边（`TRUE/FALSE`）
    - 目标是让流程图与动作列表的“线性主流程”语义保持一致，避免出现孤立节点导致预览与执行理解偏差
+8. 运行可观测性基线补齐：
+   - 新增结构化运行报告模型 `RuntimeRunReport`（包含 traceId、source、errorCode、validationIssues、traceEvents）
+   - 新增本地报告仓库 `RuntimeRunReportRepository`，以 NDJSON 持久化最近运行记录（默认保留 120 条）
+   - 首页运行与浮窗运行统一写入同一报告仓库，控制台支持“一键复制最近运行报告 JSON”
+9. 调试历史可视化补齐：
+   - 控制台新增“运行历史（调试）”列表，直接展示最近运行的关键摘要（状态、错误码、来源、时长、step）
+   - 支持按 `reportId` 精确复制单条 JSON，减少“只能复制最近一条”导致的定位摩擦
+10. 动作级 trace 细节补齐：
+   - `RuntimeTraceEvent` 新增 `details` 字段，承载动作级上下文（参数摘要、下一跳、postDelay、actionResult 状态/错误码）
+   - 导出的运行报告 JSON 会原样携带 `traceEvents.details`，后续排查可直接还原“每一步发生了什么、为何跳到下一步”

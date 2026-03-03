@@ -39,6 +39,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.ksxkq.cmm_clicker.feature.debug.RuntimeRunReportSummary
 import com.ksxkq.cmm_clicker.feature.task.TaskRecord
 import com.ksxkq.cmm_clicker.ui.theme.AppThemeMode
 
@@ -64,6 +65,8 @@ fun MainTabsRoute(
     doSwipeBranch: Boolean,
     lastRunSummary: String,
     lastRunTrace: String,
+    runtimeReportMessage: String,
+    runtimeReportHistory: List<RuntimeRunReportSummary>,
     onThemeModeToggle: () -> Unit,
     onCreateTask: (String) -> Unit,
     onOpenTaskOverlay: (String) -> Unit,
@@ -79,6 +82,9 @@ fun MainTabsRoute(
     onDryRunChanged: (Boolean) -> Unit,
     onDoSwipeBranchChanged: (Boolean) -> Unit,
     onRunCurrentTask: () -> Unit,
+    onCopyLatestRunReport: () -> Unit,
+    onCopyRunReport: (String) -> Unit,
+    onRefreshRunReports: () -> Unit,
 ) {
     var tab by rememberSaveable { mutableStateOf(MainTab.TASKS) }
 
@@ -139,6 +145,8 @@ fun MainTabsRoute(
                     activeTaskName = activeTaskName,
                     lastRunSummary = lastRunSummary,
                     lastRunTrace = lastRunTrace,
+                    runtimeReportMessage = runtimeReportMessage,
+                    runtimeReportHistory = runtimeReportHistory,
                     onOpenAccessibilitySettings = onOpenAccessibilitySettings,
                     onAutoEnableAccessibility = onAutoEnableAccessibility,
                     onRefreshStatus = onRefreshStatus,
@@ -147,6 +155,9 @@ fun MainTabsRoute(
                     onDryRunChanged = onDryRunChanged,
                     onDoSwipeBranchChanged = onDoSwipeBranchChanged,
                     onRunCurrentTask = onRunCurrentTask,
+                    onCopyLatestRunReport = onCopyLatestRunReport,
+                    onCopyRunReport = onCopyRunReport,
+                    onRefreshRunReports = onRefreshRunReports,
                 )
             }
 

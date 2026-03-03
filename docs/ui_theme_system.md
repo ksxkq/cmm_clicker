@@ -77,6 +77,7 @@
 26. 可见堆叠深度控制：交互允许深层导航，但 UI 仅展示最近两层页面（当前层 + 上一层），防止多层同时可见造成布局与可读性问题。
 27. 堆叠参数命名按“两层可见”语义维护（`PREVIOUS_LAYER / FOREGROUND_LAYER / BACKGROUND_LAYER`），避免出现与当前设计不一致的“第三层参数”歧义。
 28. 位置 inset 动画必须做非负保护（`coerceAtLeast(0.dp)`），防止 spring 回弹导致 `Padding must be non-negative` 崩溃。
+29. 主题 XML 需兼容 `minSdk=24`：按钮横向内边距使用 `android:paddingStart/paddingEnd`，不使用 `android:paddingHorizontal`（API 26+）以避免 lint `NewApi` 阻断。
 
 ## 6. 后续扩展建议
 

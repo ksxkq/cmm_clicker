@@ -44,6 +44,7 @@ data class RuntimeTraceEvent(
     val nodeKind: NodeKind,
     val phase: RuntimeTracePhase,
     val message: String? = null,
+    val details: Map<String, String> = emptyMap(),
     val timeMillis: Long = System.currentTimeMillis(),
 )
 

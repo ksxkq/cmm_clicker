@@ -1,6 +1,8 @@
 package com.ksxkq.cmm_clicker.ui
 
 import android.content.Intent
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
@@ -17,7 +19,10 @@ import com.ksxkq.cmm_clicker.accessibility.AccessibilityPermissionChecker
 import com.ksxkq.cmm_clicker.accessibility.TaskAccessibilityService
 import com.ksxkq.cmm_clicker.core.runtime.FlowRuntimeEngine
 import com.ksxkq.cmm_clicker.core.runtime.RuntimeEngineOptions
+import com.ksxkq.cmm_clicker.core.runtime.RuntimeRunReport
 import com.ksxkq.cmm_clicker.core.runtime.SampleFlowBundleFactory
+import com.ksxkq.cmm_clicker.feature.debug.RuntimeRunReportRepository
+import com.ksxkq.cmm_clicker.feature.debug.RuntimeRunReportSummary
 import com.ksxkq.cmm_clicker.feature.editor.TaskGraphEditorStore
 import com.ksxkq.cmm_clicker.feature.task.LocalFileTaskRepository
 import com.ksxkq.cmm_clicker.feature.task.TaskRecord
@@ -32,6 +37,7 @@ import kotlinx.coroutines.withContext
 class MainActivity : ComponentActivity() {
     private val themePreferenceStore by lazy { ThemePreferenceStore(applicationContext) }
     private val taskRepository by lazy { LocalFileTaskRepository(applicationContext) }
+    private val runtimeRunReportRepository by lazy { RuntimeRunReportRepository(applicationContext) }
     private val editorStore by lazy {
         TaskGraphEditorStore(
             initialBundle = SampleFlowBundleFactory.createSimpleDemoBundle(),
@@ -53,6 +59,8 @@ class MainActivity : ComponentActivity() {
     private var running by mutableStateOf(false)
     private var lastRunSummary by mutableStateOf("未运行")
     private var lastRunTrace by mutableStateOf("")
+    private var runtimeReportMessage by mutableStateOf("")
+    private var runtimeReportHistory by mutableStateOf<List<RuntimeRunReportSummary>>(emptyList())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -63,6 +71,7 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             loadTasksFromRepository()
         }
+        refreshRuntimeRunReports()
         refreshPermissionStatus(attemptAutoEnable = true)
         setContent {
             CmmClickerTheme(themeMode = themeMode) {
@@ -83,6 +92,8 @@ class MainActivity : ComponentActivity() {
                         doSwipeBranch = doSwipeBranch,
                         lastRunSummary = lastRunSummary,
                         lastRunTrace = lastRunTrace,
+                        runtimeReportMessage = runtimeReportMessage,
+                        runtimeReportHistory = runtimeReportHistory,
                         onThemeModeToggle = { toggleThemeMode() },
                         onCreateTask = { name -> createTask(name) },
                         onOpenTaskOverlay = { taskId -> openTaskOverlay(taskId) },
@@ -111,6 +122,9 @@ class MainActivity : ComponentActivity() {
                         onDryRunChanged = { dryRun = it },
                         onDoSwipeBranchChanged = { doSwipeBranch = it },
                         onRunCurrentTask = { runCurrentTask() },
+                        onCopyLatestRunReport = { copyLatestRunReportToClipboard() },
+                        onCopyRunReport = { reportId -> copyRunReportToClipboard(reportId) },
+                        onRefreshRunReports = { refreshRuntimeRunReports() },
                     )
                 }
             }
@@ -120,6 +134,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         refreshPermissionStatus(attemptAutoEnable = true)
+        refreshRuntimeRunReports()
     }
 
     private fun refreshPermissionStatus(attemptAutoEnable: Boolean = false) {
@@ -313,6 +328,7 @@ class MainActivity : ComponentActivity() {
         lastRunSummary = "运行中..."
         lifecycleScope.launch {
             try {
+                val startedAtMs = System.currentTimeMillis()
                 val result = withContext(Dispatchers.Default) {
                     FlowRuntimeEngine(
                         options = RuntimeEngineOptions(
@@ -325,6 +341,7 @@ class MainActivity : ComponentActivity() {
                         initialVariables = mapOf("doSwipe" to doSwipeBranch),
                     )
                 }
+                val finishedAtMs = System.currentTimeMillis()
                 val summary = buildString {
                     append("模式=${if (dryRun) "DRY_RUN" else "REAL"} ")
                     append("状态=${result.status} ")
@@ -335,10 +352,20 @@ class MainActivity : ComponentActivity() {
                     .takeLast(10)
                     .joinToString(separator = "\n") { event ->
                         "${event.step}. ${event.phase} ${event.flowId}/${event.nodeId} ${event.message ?: ""}".trim()
-                    }
+                }
                 lastRunSummary = summary
                 lastRunTrace = tracePreview
+                val report = RuntimeRunReport.fromExecution(
+                    source = "main_console",
+                    taskId = taskId,
+                    taskName = taskRecords.firstOrNull { it.taskId == taskId }?.name ?: bundle.name,
+                    dryRun = dryRun,
+                    startedAtEpochMs = startedAtMs,
+                    finishedAtEpochMs = finishedAtMs,
+                    result = result,
+                )
                 val updated = withContext(Dispatchers.IO) {
+                    runCatching { runtimeRunReportRepository.append(report) }
                     taskRepository.updateTaskRunInfo(
                         taskId = taskId,
                         status = result.status.name,
@@ -348,6 +375,7 @@ class MainActivity : ComponentActivity() {
                 if (updated != null) {
                     updateTaskRecordInState(updated)
                 }
+                refreshRuntimeRunReports()
             } catch (e: Exception) {
                 lastRunSummary = "运行异常: ${e.message ?: "unknown"}"
                 lastRunTrace = ""
@@ -355,6 +383,45 @@ class MainActivity : ComponentActivity() {
                 running = false
                 refreshPermissionStatus(attemptAutoEnable = false)
             }
+        }
+    }
+
+    private fun copyLatestRunReportToClipboard() {
+        lifecycleScope.launch {
+            val latest = withContext(Dispatchers.IO) {
+                runtimeRunReportRepository.latestJson()
+            }
+            if (latest.isNullOrBlank()) {
+                runtimeReportMessage = "暂无可复制的运行报告"
+                return@launch
+            }
+            val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+            clipboard.setPrimaryClip(ClipData.newPlainText("runtime_run_report", latest))
+            runtimeReportMessage = "已复制最近运行报告(JSON)"
+        }
+    }
+
+    private fun copyRunReportToClipboard(reportId: String) {
+        lifecycleScope.launch {
+            val raw = withContext(Dispatchers.IO) {
+                runtimeRunReportRepository.findJsonByReportId(reportId)
+            }
+            if (raw.isNullOrBlank()) {
+                runtimeReportMessage = "目标运行报告不存在或已过期"
+                return@launch
+            }
+            val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+            clipboard.setPrimaryClip(ClipData.newPlainText("runtime_run_report", raw))
+            runtimeReportMessage = "已复制运行报告(JSON): $reportId"
+        }
+    }
+
+    private fun refreshRuntimeRunReports() {
+        lifecycleScope.launch {
+            val history = withContext(Dispatchers.IO) {
+                runtimeRunReportRepository.listLatestSummaries(limit = 10)
+            }
+            runtimeReportHistory = history
         }
     }
 

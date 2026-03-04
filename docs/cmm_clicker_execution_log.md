@@ -618,12 +618,36 @@
 549. 开始任务确认交互收敛：将 `ConfirmStartTask` 的 `dismissOnBackdropTap` 调整为 `false`，开始任务弹窗不再允许点击半透明背景直接关闭，避免误触丢失确认操作。
 550. 单测补齐：`TaskControlPanelSettingsModalTest` 增加 `dismissOnBackdropTap=false` 断言，防止后续弹窗模型回退为可背景关闭。
 551. 稳定性验证：以上“开始任务弹窗禁用背景关闭”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+552. 设置 overlay UI 状态机首版落地：新增 `TaskControlPanelSettingsOverlayUiStateMachine.kt`（`SettingsOverlayUiState` + `SettingsOverlayUiEvent` + reducer），收敛 `visible/sheetVisible/dismissAnimating` 的状态迁移。
+553. 生命周期编排接线：`TaskControlPanelGlobalOverlay` 新增 `dispatchSettingsOverlayUiEvent(...)`，并将 `showSettingsOverlayRoute/startSettingsSheetEnterAnimation/animateSettingsOverlayDismiss/removeSettingsOverlay/removeOverlay` 接入 reducer，减少散落赋值。
+554. 状态机单测补齐：新增 `TaskControlPanelSettingsOverlayUiStateMachineTest`，覆盖展示、展示 sheet、开始/结束关闭动画三条核心迁移链路。
+555. 稳定性验证：以上“设置 overlay UI 状态机接入”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+556. 主面板可见性状态机首版落地：新增 `TaskControlPanelPanelVisibilityStateMachine.kt`，抽离 `PanelDisplayMode + PanelHideReason` 到统一 `PanelVisibilityState` 与 reducer（`SetDisplayMode/SetHideReason/ClearHideReasons`）。
+557. Overlay 接线替换：`TaskControlPanelGlobalOverlay` 将 `panelDisplayMode + SnapshotStateMap` 收敛为单一 `panelVisibilityState`，`setPanelDisplayMode/setPanelHideReason/clearPanelHideReasons` 全部改为事件驱动写入。
+558. 读路径统一：运行中 MINI 判定、隐藏原因计算与面板展示条件统一改为读取 `panelVisibilityState.hideReasons`（`Set`），移除旧 map 风格读取分支。
+559. 状态机单测补齐：新增 `TaskControlPanelPanelVisibilityStateMachineTest`，覆盖 display mode 切换、hide reason 开关与 clear 全量重置。
+560. 稳定性验证：以上“主面板可见性状态机接入”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+561. 主面板展示判定下沉：新增 `TaskControlPanelPanelVisibilityPresentation.kt`，将 `OverlayContent` 内联的 `runningMiniActive/fullPanelVisible/miniPanelVisible/panelVisible` 计算抽为纯函数 `computePanelRenderVisibility(...)`。
+562. 渲染层接线收敛：`TaskControlPanelGlobalOverlay.OverlayContent` 改为消费 presentation 结果，减少 UI 组合层直接拼装显示条件，便于后续统一调参。
+563. 展示判定单测补齐：新增 `TaskControlPanelPanelVisibilityPresentationTest`，覆盖 FULL 展示、RUNNING_MINI 展示、非运行隐藏原因阻断 MINI 展示三条关键路径。
+564. 稳定性验证：以上“主面板展示判定下沉”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+565. 主面板状态写入入口统一：`TaskControlPanelGlobalOverlay` 新增 `dispatchPanelVisibilityEvent(...)`，`setPanelDisplayMode/setPanelHideReason/clearPanelHideReasons` 统一通过 reducer 分发，消除重复 next-state 计算。
+566. 稳定性验证：以上“主面板事件分发入口统一”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+567. 面板模式类型抽离：新增 `TaskControlPanelPanelMode.kt`，将 `PanelMode` 提升为独立可复用类型，减少 `GlobalOverlay` 内嵌枚举数量。
+568. 面板宽度计算下沉：新增 `TaskControlPanelPanelLayout.kt`，将主面板卡片宽度映射提取为纯函数 `resolvePanelCardWidthDp(...)`，`OverlayContent` 改为函数调用。
+569. 布局映射单测补齐：新增 `TaskControlPanelPanelLayoutTest`，覆盖 MINI（运行/非运行）与 FULL（NORMAL/RECORDING/RUNNING）宽度映射。
+570. 稳定性验证：以上“面板模式/布局映射下沉”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+571. 重复状态重置收敛：`TaskControlPanelGlobalOverlay` 新增 `resetRecordingSaveDialogState()` 与 `resetClickPickerState()`，统一初始化/移除/录制启动链路中的重复清理逻辑。
+572. 生命周期链路复用：`initializePanelState/removeSettingsOverlay/removeOverlay/startRecordingSession` 改为复用上述 helper，减少状态字段拷贝赋值并降低遗漏风险。
+573. 稳定性验证：以上“重复状态重置收敛”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+574. 设置层入口阻断判断收敛：`TaskControlPanelGlobalOverlay` 新增 `isSettingsOverlayEntryBlocked()`，统一 `openSettingsPanel/openReportHistoryOverlay/openRunHistoryOverlay` 的前置阻断条件（录制保存弹层、modal、录制态）。
+575. 稳定性验证：以上“设置层入口阻断判断收敛”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
 
 ## 3. 正在进行
 
 1. 全局操作面板实机交互打磨（录制态按钮间距/状态文案/误触控制、运行态信息密度与按钮排布、录制提示层反馈；录制保存后开始确认链路已接入）。
 2. 调试面板前置能力推进：已打通“任务菜单历史记录入口 + 删除能力”，下一步继续补齐筛选、搜索与分页体验。
-3. 继续推进页面状态层拆分第二阶段：运行态、本次执行会话态、设置路由、设置模态决策、设置页数据装配与生命周期判定/调度已完成首轮收敛，下一步继续抽离 overlay 生命周期编排为可测试事件状态机。
+3. 继续推进页面状态层拆分第二阶段：运行态、本次执行会话态、设置路由、设置模态决策、设置页数据装配与 overlay/主面板状态机与展示判定已完成首轮收敛，下一步继续抽离“状态机副作用调度器（定时/动画/View 操作）”与 UI 渲染绑定。
 4. 编辑页组件化：`TaskList/ActionList/NodeEditor`、状态容器、规则逻辑与单测已完成；当前进入实机联调与体验回归阶段。
 5. 录制多指会话实机打磨（手指数上限、停顿阈值、不同机型采样密度）。
 6. 首页任务入口已收敛为单按钮，后续观察是否需要在首页增加“最近任务摘要”只读信息（不引入第二条编辑路径）。

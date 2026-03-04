@@ -472,3 +472,28 @@ interface ActionPlugin {
 40. 录制保存后的主路径收敛（阶段二-交互优化）：
    - 录制保存成功后复用现有“开始任务确认”弹窗，不再追加额外编辑入口
    - 触发时机对齐为“录制保存弹窗退出后再弹确认”，保证弹层过渡连续性
+41. 设置 overlay UI 状态机接入（阶段二-状态拆分）：
+   - 新增 `TaskControlPanelSettingsOverlayUiStateMachine.kt`，统一管理 `visible/sheetVisible/dismissAnimating` 三元状态迁移
+   - `TaskControlPanelGlobalOverlay` 增加 `dispatchSettingsOverlayUiEvent(...)` 作为状态机入口，关键显示/关闭链路改为事件驱动
+   - 对应单测 `TaskControlPanelSettingsOverlayUiStateMachineTest` 覆盖 show/show-sheet/dismiss 主迁移路径
+42. 主面板可见性状态机接入（阶段二-状态拆分）：
+   - 新增 `TaskControlPanelPanelVisibilityStateMachine.kt`，统一管理 `PanelDisplayMode` 与 `PanelHideReason` 的组合状态
+   - `TaskControlPanelGlobalOverlay` 将 `panelDisplayMode + hideReason map` 收敛为单一 `panelVisibilityState`，并通过 reducer 统一处理 display/hide/clear 事件
+   - 对应单测 `TaskControlPanelPanelVisibilityStateMachineTest` 覆盖 display mode 切换、hide reason 开关与 clear 重置
+43. 主面板展示判定下沉（阶段二-状态拆分）：
+   - 新增 `TaskControlPanelPanelVisibilityPresentation.kt`，承载 FULL/MINI 展示条件与 RUNNING_MINI 判定纯函数
+   - `TaskControlPanelGlobalOverlay.OverlayContent` 改为读取 presentation 输出，减少 UI 组合层直接拼装可见性条件
+   - 对应单测 `TaskControlPanelPanelVisibilityPresentationTest` 覆盖 FULL 展示、RUNNING_MINI 展示与阻断场景
+44. 主面板事件分发入口统一（阶段二-状态拆分）：
+   - `TaskControlPanelGlobalOverlay` 增加 `dispatchPanelVisibilityEvent(...)`，作为 `PanelVisibilityState` 唯一写入口
+   - display mode / hide reason / clear hide reasons 均通过 reducer 分发，降低多处重复 next-state 比较逻辑
+45. 主面板布局映射下沉（阶段二-状态拆分）：
+   - 新增 `TaskControlPanelPanelMode.kt` 与 `TaskControlPanelPanelLayout.kt`，收敛 `PanelMode` 类型和卡片宽度映射规则
+   - `OverlayContent` 的宽度计算改为 `resolvePanelCardWidthDp(...)` 纯函数调用，降低 UI 组合层分支密度
+   - 对应单测 `TaskControlPanelPanelLayoutTest` 覆盖 FULL/MINI 宽度映射
+46. Overlay 重复清理逻辑收敛（阶段二-状态拆分）：
+   - `TaskControlPanelGlobalOverlay` 新增 `resetRecordingSaveDialogState()` 与 `resetClickPickerState()`，统一录制保存弹层与选点状态重置
+   - 初始化与 overlay 移除链路改为复用重置函数，减少多处重复字段赋值
+47. 设置层入口阻断规则收敛（阶段二-状态拆分）：
+   - `TaskControlPanelGlobalOverlay` 新增 `isSettingsOverlayEntryBlocked()`，统一“设置/历史/本次执行历史”入口的阻断条件
+   - 避免不同入口各自维护阻断表达式，降低后续交互改动出现条件漂移的风险

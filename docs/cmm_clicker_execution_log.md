@@ -612,10 +612,16 @@
 543. 关闭/最小化链路复用：`closeSettingsPanel()` 与 `minimizeSettingsOverlay()` 改为共用 dismiss 动画 helper，减少重复状态写入并统一“动画完成后再执行副作用”时序。
 544. 恢复链路复用：`showSettingsOverlayRoute()` 与 `restoreSettingsOverlayFromMini()` 的 sheet 进入延迟统一改为 `startSettingsSheetEnterAnimation()`，降低不同入口动画时序漂移风险。
 545. 稳定性验证：以上“生命周期副作用调度收敛”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+546. 录制保存后执行确认链路优化：`confirmSaveRecordingSession()` 在保存成功后延迟 `RECORDING_SAVE_TO_START_CONFIRM_DELAY_MS`（220ms）触发 `promptStartLastTaskConfirmation()`，复用现有“开始任务确认”弹窗而不引入编辑入口。
+547. 动效时序对齐：开始任务确认弹窗在录制保存弹窗退出动画后出现，避免两层弹窗同时过渡导致视觉冲突。
+548. 稳定性验证：以上“录制保存后开始确认弹窗复用”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+549. 开始任务确认交互收敛：将 `ConfirmStartTask` 的 `dismissOnBackdropTap` 调整为 `false`，开始任务弹窗不再允许点击半透明背景直接关闭，避免误触丢失确认操作。
+550. 单测补齐：`TaskControlPanelSettingsModalTest` 增加 `dismissOnBackdropTap=false` 断言，防止后续弹窗模型回退为可背景关闭。
+551. 稳定性验证：以上“开始任务弹窗禁用背景关闭”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
 
 ## 3. 正在进行
 
-1. 全局操作面板实机交互打磨（录制态按钮间距/状态文案/误触控制、运行态信息密度与按钮排布、录制提示层反馈）。
+1. 全局操作面板实机交互打磨（录制态按钮间距/状态文案/误触控制、运行态信息密度与按钮排布、录制提示层反馈；录制保存后开始确认链路已接入）。
 2. 调试面板前置能力推进：已打通“任务菜单历史记录入口 + 删除能力”，下一步继续补齐筛选、搜索与分页体验。
 3. 继续推进页面状态层拆分第二阶段：运行态、本次执行会话态、设置路由、设置模态决策、设置页数据装配与生命周期判定/调度已完成首轮收敛，下一步继续抽离 overlay 生命周期编排为可测试事件状态机。
 4. 编辑页组件化：`TaskList/ActionList/NodeEditor`、状态容器、规则逻辑与单测已完成；当前进入实机联调与体验回归阶段。

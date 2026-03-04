@@ -72,7 +72,7 @@ internal fun buildSettingsModalModel(
                 title = "确认开始任务",
                 message = "是否开始执行任务：${modal.taskName.ifBlank { "未命名任务" }}",
                 tone = TaskControlModalTone.DEFAULT,
-                dismissOnBackdropTap = true,
+                dismissOnBackdropTap = false,
                 actions = listOf(
                     TaskControlModalAction(
                         key = MODAL_ACTION_CANCEL,

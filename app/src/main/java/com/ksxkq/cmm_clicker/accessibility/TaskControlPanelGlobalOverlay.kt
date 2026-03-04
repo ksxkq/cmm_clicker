@@ -178,6 +178,7 @@ class TaskControlPanelGlobalOverlay(
         private const val KEY_SELECTED_TASK_ID = "selected_task_id"
         private const val KEY_LAST_STARTED_TASK_ID = "last_started_task_id"
         private const val RECORDING_SAVE_DIALOG_ENTER_DELAY_MS = 18L
+        private const val RECORDING_SAVE_TO_START_CONFIRM_DELAY_MS = 220L
         private const val AUX_OVERLAY_SCRIM_ALPHA = 0.5f
         private const val AUX_OVERLAY_SCRIM_FADE_MS = 220
         private const val CLICK_PICKER_SCRIM_ALPHA = 0.08f
@@ -3126,6 +3127,8 @@ class TaskControlPanelGlobalOverlay(
             stopRecordingTicker(resetElapsed = true)
             statusText = "已保存录制任务：${saved.name}"
             touchUi()
+            delay(RECORDING_SAVE_TO_START_CONFIRM_DELAY_MS)
+            promptStartLastTaskConfirmation()
         }
     }
 

@@ -455,6 +455,7 @@ interface ActionPlugin {
    - 新增 `TaskControlPanelSettingsModal.kt`，承载 `SettingsModal` 模型与 `resolveSettingsModalAction()` 纯决策函数（`Dismiss/StartTask/DeleteRuntimeReport`）
    - `TaskControlPanelGlobalOverlay.onSettingsModalAction` 改为统一“动作解析 + modal 关闭 + 延迟副作用调度”流程，减少重复分支并保持动效先于业务执行
    - `buildSettingsModalModel(...)` 同步下沉至 modal 模块，统一确认/反馈弹窗的 UI 模型映射逻辑
+   - `ConfirmStartTask` 明确禁用背景点击关闭（`dismissOnBackdropTap=false`），开始任务确认必须通过按钮显式选择
    - 对应单测 `TaskControlPanelSettingsModalTest` 覆盖“确认开始/确认删除/反馈弹窗默认关闭/未知动作忽略”，保障后续 modal 增量扩展
 37. 设置页数据装配下沉（阶段二-状态拆分）：
    - 新增 `TaskControlPanelReportHistoryPresentation.kt`，承载历史页作用域标签、详情当前项解析、翻页状态与相邻记录定位纯函数
@@ -468,3 +469,6 @@ interface ActionPlugin {
    - `TaskControlPanelGlobalOverlay` 新增 `startSettingsSheetEnterAnimation()` 与 `animateSettingsOverlayDismiss(...)`，统一设置层进入/关闭动画调度
    - `closeSettingsPanel`、`minimizeSettingsOverlay`、`restoreSettingsOverlayFromMini` 与 `showSettingsOverlayRoute` 复用上述调度函数，减少重复延迟逻辑和状态重置分支
    - 保持“动画完成后再执行副作用”的时序约束，降低不同关闭入口造成的状态漂移
+40. 录制保存后的主路径收敛（阶段二-交互优化）：
+   - 录制保存成功后复用现有“开始任务确认”弹窗，不再追加额外编辑入口
+   - 触发时机对齐为“录制保存弹窗退出后再弹确认”，保证弹层过渡连续性

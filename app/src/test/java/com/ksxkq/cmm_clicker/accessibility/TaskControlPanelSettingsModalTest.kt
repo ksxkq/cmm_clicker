@@ -2,6 +2,7 @@ package com.ksxkq.cmm_clicker.accessibility
 
 import com.ksxkq.cmm_clicker.feature.debug.RuntimeRunReportSummary
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -104,6 +105,7 @@ class TaskControlPanelSettingsModalTest {
         assertEquals("确认开始任务", model?.title)
         assertTrue(model?.message?.contains("未命名任务") == true)
         assertEquals(TaskControlModalTone.DEFAULT, model?.tone)
+        assertFalse(model?.dismissOnBackdropTap ?: true)
         assertEquals(2, model?.actions?.size)
     }
 }

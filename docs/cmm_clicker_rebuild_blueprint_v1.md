@@ -406,3 +406,23 @@ interface ActionPlugin {
    - 历史详情页新增“上一条/下一条”切换，按当前筛选结果线性浏览记录
    - 移除历史页面中的“复制 JSON”操作，保留“详情 + 删除”最小动作集
    - 共享弹窗脚手架在无限高度约束下禁用 `verticalScroll`，修复历史删除后偶发滚动测量崩溃
+29. Overlay 弹层约束统一（阶段二-稳定性）：
+   - 浮窗场景（`TYPE_ACCESSIBILITY_OVERLAY`）禁止使用会创建独立应用窗口 token 的 `Dialog/AlertDialog`
+   - 任务库与历史页的确认交互统一改为“同层卡片确认”，由 overlay 容器承载
+   - 该约束作为后续浮窗页面新增交互的默认规则，避免 `BadTokenException` 回归
+30. 历史删除确认重构（阶段二-交互一致性）：
+   - 历史列表删除确认改为 overlay 顶层“居中模态卡片 + 遮罩”，不再作为列表内联节点显示
+   - 删除确认状态提升到 `TaskControlPanelGlobalOverlay`，保证在滚动内容区域内仍保持固定模态层表现
+   - 保持无系统窗口依赖，兼容 `TYPE_ACCESSIBILITY_OVERLAY` 运行环境
+31. 浮窗模态层统一（阶段二-弹层规范）：
+   - 模态确认弹层统一在 `SettingsOverlayContent` 顶层渲染，覆盖整个 addView 区域
+   - 接入统一的 fade/slide 动画参数，保持与录制保存/开始确认弹层一致的动效体验
+   - 继续避免 `Dialog/AlertDialog`，防止 overlay 场景 token 不匹配导致的窗口异常
+32. 浮窗弹层宿主抽象（阶段二-可扩展）：
+   - 新增 `TaskControlPanelModalHost` 作为统一模态渲染入口，收敛 `title/message/tone/actions` 配置模型
+   - “开始任务确认 / 历史删除确认 / 成功失败提示”共享同一状态容器（`SettingsModal`）与关闭策略，避免分散状态机导致动效和层级不一致
+   - 模态关闭后仅在过渡状态 idle 时移除 overlay，确保 scrim 与卡片退出动画完整播放，减少“背景突变消失”的割裂感
+   - `ModalHost` 在退出动画阶段保留最后一次 `model`，防止过渡中途因 `model` 置空而 uncompose，避免出现“看不见的遮罩层残留”
+   - 所有 modal 关闭入口（按钮/遮罩/异常回收）统一传递 `removeOverlayWhenIdle`，保证无遮罩页面可及时回收 `settingsOverlayView`
+   - 对确认类动作引入短延迟（`MODAL_EXIT_DELAY_MS`）在退出动画后执行业务副作用，减少“动画被业务刷新抢断”的视觉不连续
+   - scrim 动效去重：确认类 modal 只使用 `ModalHost` 的 scrim 过渡，`SettingsOverlayContent` 的基础 scrim 不再在 modal 场景叠加，避免双曲线叠加造成的背景闪停

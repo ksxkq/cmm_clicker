@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.MoreHoriz
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -737,30 +736,51 @@ internal fun TaskControlSettingsActionListPage(
         Spacer(modifier = Modifier.height(8.dp))
     }
     if (pendingDeleteNode != null) {
-        AlertDialog(
-            onDismissRequest = { actionListUiState.pendingDeleteNodeId = null },
-            title = { Text("删除动作") },
-            text = {
-                Text("确认删除动作 ${pendingDeleteNode.nodeId} 吗？")
-            },
-            confirmButton = {
-                OutlinedButton(
-                    onClick = {
-                        val nodeId = pendingDeleteNode.nodeId
-                        actionListUiState.pendingDeleteNodeId = null
-                        mutateSettingsEditor("已删除动作") {
-                            it.removeNode(nodeId)
-                        }
-                    },
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    text = "删除动作",
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                Text(
+                    text = "确认删除动作 ${pendingDeleteNode.nodeId} 吗？",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text("确认删除")
+                    OutlinedButton(
+                        modifier = Modifier.weight(1f),
+                        onClick = { actionListUiState.pendingDeleteNodeId = null },
+                    ) {
+                        Text("取消")
+                    }
+                    OutlinedButton(
+                        modifier = Modifier.weight(1f),
+                        onClick = {
+                            val nodeId = pendingDeleteNode.nodeId
+                            actionListUiState.pendingDeleteNodeId = null
+                            mutateSettingsEditor("已删除动作") {
+                                it.removeNode(nodeId)
+                            }
+                        },
+                    ) {
+                        Text("确认删除")
+                    }
                 }
-            },
-            dismissButton = {
-                OutlinedButton(onClick = { actionListUiState.pendingDeleteNodeId = null }) {
-                    Text("取消")
-                }
-            },
-        )
+            }
+        }
     }
 }

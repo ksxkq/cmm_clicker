@@ -59,7 +59,6 @@ import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -180,6 +179,9 @@ class TaskControlPanelGlobalOverlay(
         private const val CLICK_PICKER_SCRIM_ALPHA = 0.08f
         private const val ACTION_LIST_MAX_VISIBLE_JUMP_LANES = 3
         private const val RUNTIME_REPORT_HISTORY_LIMIT = 80
+        private const val MODAL_ACTION_CANCEL = "cancel"
+        private const val MODAL_ACTION_CONFIRM = "confirm"
+        private const val MODAL_EXIT_DELAY_MS = 130L
     }
 
     private data class RecordedStroke(
@@ -230,6 +232,27 @@ class TaskControlPanelGlobalOverlay(
         ) : SettingsRoute
     }
 
+    private sealed interface SettingsModal {
+        data class ConfirmStartTask(
+            val taskId: String,
+            val taskName: String,
+        ) : SettingsModal
+
+        data class ConfirmDeleteRuntimeReport(
+            val reportId: String,
+        ) : SettingsModal
+
+        data class Success(
+            val title: String,
+            val message: String,
+        ) : SettingsModal
+
+        data class Failure(
+            val title: String,
+            val message: String,
+        ) : SettingsModal
+    }
+
     private val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private val taskRepository = LocalFileTaskRepository(context)
     private val runtimeRunReportRepository = RuntimeRunReportRepository(context)
@@ -275,10 +298,6 @@ class TaskControlPanelGlobalOverlay(
     private var panelMode by mutableStateOf(PanelMode.NORMAL)
     private var recordingSaveDialogVisible by mutableStateOf(false)
     private var recordingSaveTaskName by mutableStateOf("")
-    private var startTaskConfirmDialogVisible by mutableStateOf(false)
-    private var startTaskConfirmTaskName by mutableStateOf("")
-    private var startTaskConfirmDialogOpenToken by mutableIntStateOf(0)
-    private var startTaskConfirmDialogAnimatingOut by mutableStateOf(false)
     private var recordedStepCount by mutableIntStateOf(0)
     private var recordingElapsedMs by mutableLongStateOf(0L)
     private var statusText by mutableStateOf("")
@@ -302,6 +321,7 @@ class TaskControlPanelGlobalOverlay(
     private var runtimeReportHistoryMessage by mutableStateOf("")
     private var runtimeReportHistoryTaskId by mutableStateOf<String?>(null)
     private var runtimeReportHistoryTaskName by mutableStateOf("")
+    private var settingsModal by mutableStateOf<SettingsModal?>(null)
     private var runtimeReportDetail by mutableStateOf<RuntimeRunReportDetail?>(null)
     private var runtimeReportDetailMessage by mutableStateOf("")
     private var uiRevision by mutableIntStateOf(0)
@@ -311,7 +331,6 @@ class TaskControlPanelGlobalOverlay(
     private var recordingSaveDialogOpenToken by mutableIntStateOf(0)
     private var recordingSaveDialogAnimatingOut by mutableStateOf(false)
     private var removeSettingsOverlayAfterRecordingDialogExit = false
-    private var removeSettingsOverlayAfterStartConfirmDialogExit = false
     private var pendingSettingsOverlayRemoval = false
     private var clickPickerVisible by mutableStateOf(false)
     private var clickPickerNodeId by mutableStateOf<String?>(null)
@@ -362,14 +381,9 @@ class TaskControlPanelGlobalOverlay(
         settingsEditorStore = null
         recordingSaveDialogVisible = false
         recordingSaveTaskName = ""
-        startTaskConfirmDialogVisible = false
-        startTaskConfirmTaskName = ""
-        startTaskConfirmDialogOpenToken = 0
-        startTaskConfirmDialogAnimatingOut = false
         recordingSaveDialogOpenToken = 0
         recordingSaveDialogAnimatingOut = false
         removeSettingsOverlayAfterRecordingDialogExit = false
-        removeSettingsOverlayAfterStartConfirmDialogExit = false
         pendingSettingsOverlayRemoval = false
         clickPickerVisible = false
         clickPickerNodeId = null
@@ -380,6 +394,7 @@ class TaskControlPanelGlobalOverlay(
         resetCurrentRunSession()
         runtimeReportHistoryTaskId = null
         runtimeReportHistoryTaskName = ""
+        settingsModal = null
         runtimeReportDetail = null
         runtimeReportDetailMessage = ""
         runtimeReportHistory = loadRuntimeReportHistory()
@@ -563,14 +578,9 @@ class TaskControlPanelGlobalOverlay(
         settingsEditorStore = null
         recordingSaveDialogVisible = false
         recordingSaveTaskName = ""
-        startTaskConfirmDialogVisible = false
-        startTaskConfirmTaskName = ""
-        startTaskConfirmDialogOpenToken = 0
-        startTaskConfirmDialogAnimatingOut = false
         recordingSaveDialogOpenToken = 0
         recordingSaveDialogAnimatingOut = false
         removeSettingsOverlayAfterRecordingDialogExit = false
-        removeSettingsOverlayAfterStartConfirmDialogExit = false
         pendingSettingsOverlayRemoval = false
         clickPickerVisible = false
         clickPickerNodeId = null
@@ -606,14 +616,9 @@ class TaskControlPanelGlobalOverlay(
         resetCurrentRunSession()
         recordingSaveDialogVisible = false
         recordingSaveTaskName = ""
-        startTaskConfirmDialogVisible = false
-        startTaskConfirmTaskName = ""
-        startTaskConfirmDialogOpenToken = 0
-        startTaskConfirmDialogAnimatingOut = false
         recordingSaveDialogOpenToken = 0
         recordingSaveDialogAnimatingOut = false
         removeSettingsOverlayAfterRecordingDialogExit = false
-        removeSettingsOverlayAfterStartConfirmDialogExit = false
         pendingSettingsOverlayRemoval = false
         clickPickerVisible = false
         clickPickerNodeId = null
@@ -632,8 +637,7 @@ class TaskControlPanelGlobalOverlay(
             settingsVisible ||
             recordingSaveDialogVisible ||
             recordingSaveDialogAnimatingOut ||
-            startTaskConfirmDialogVisible ||
-            startTaskConfirmDialogAnimatingOut
+            settingsModal != null
         ) {
             return
         }
@@ -665,34 +669,6 @@ class TaskControlPanelGlobalOverlay(
         recordingSaveDialogAnimatingOut = false
         val shouldRemoveOverlay = removeSettingsOverlayAfterRecordingDialogExit
         removeSettingsOverlayAfterRecordingDialogExit = false
-        if (shouldRemoveOverlay && !settingsVisible) {
-            pendingSettingsOverlayRemoval = true
-        }
-        touchUi()
-    }
-
-    private fun dismissStartTaskConfirmDialogWithAnimation(removeOverlayWhenIdle: Boolean) {
-        if (!startTaskConfirmDialogVisible && !startTaskConfirmDialogAnimatingOut) {
-            if (removeOverlayWhenIdle && !settingsVisible) {
-                pendingSettingsOverlayRemoval = true
-                removeSettingsOverlayIfIdle()
-            }
-            return
-        }
-        startTaskConfirmDialogVisible = false
-        startTaskConfirmDialogAnimatingOut = true
-        startTaskConfirmTaskName = ""
-        removeSettingsOverlayAfterStartConfirmDialogExit = removeOverlayWhenIdle
-        touchUi()
-    }
-
-    private fun onStartTaskConfirmDialogExitAnimationSettled() {
-        if (!startTaskConfirmDialogAnimatingOut) {
-            return
-        }
-        startTaskConfirmDialogAnimatingOut = false
-        val shouldRemoveOverlay = removeSettingsOverlayAfterStartConfirmDialogExit
-        removeSettingsOverlayAfterStartConfirmDialogExit = false
         if (shouldRemoveOverlay && !settingsVisible) {
             pendingSettingsOverlayRemoval = true
         }
@@ -790,7 +766,7 @@ class TaskControlPanelGlobalOverlay(
         if (
             settingsVisible ||
             recordingSaveDialogVisible ||
-            startTaskConfirmDialogVisible ||
+            settingsModal != null ||
             panelMode == PanelMode.RECORDING
         ) {
             return
@@ -838,6 +814,10 @@ class TaskControlPanelGlobalOverlay(
                 return@launch
             }
             runtimeReportHistory = history
+            val pendingDeleteId = (settingsModal as? SettingsModal.ConfirmDeleteRuntimeReport)?.reportId
+            if (pendingDeleteId != null && history.none { it.reportId == pendingDeleteId }) {
+                dismissSettingsModal()
+            }
             if (message != null) {
                 runtimeReportHistoryMessage = if (withCount) {
                     "$message（共${history.size}条）"
@@ -865,6 +845,9 @@ class TaskControlPanelGlobalOverlay(
                 return@launch
             }
             runtimeReportHistory = history
+            if ((settingsModal as? SettingsModal.ConfirmDeleteRuntimeReport)?.reportId == reportId) {
+                dismissSettingsModal()
+            }
             runtimeReportHistoryMessage = "已删除历史记录（剩余${history.size}条）"
             if (runtimeReportDetail?.reportId == reportId) {
                 runtimeReportDetail = null
@@ -883,6 +866,7 @@ class TaskControlPanelGlobalOverlay(
         runtimeReportHistoryTaskName = taskName?.ifBlank { null }
             ?: tasks.firstOrNull { it.taskId == taskId }?.name
             ?: ""
+        settingsModal = null
         runtimeReportDetail = null
         runtimeReportDetailMessage = ""
         runtimeReportHistoryMessage = ""
@@ -892,7 +876,7 @@ class TaskControlPanelGlobalOverlay(
             touchUi()
             return
         }
-        if (recordingSaveDialogVisible || startTaskConfirmDialogVisible || panelMode == PanelMode.RECORDING) {
+        if (recordingSaveDialogVisible || settingsModal != null || panelMode == PanelMode.RECORDING) {
             return
         }
         panelNeedsEntryAnimation = false
@@ -921,6 +905,7 @@ class TaskControlPanelGlobalOverlay(
     }
 
     private fun openRuntimeReportDetail(reportId: String) {
+        settingsModal = null
         runtimeReportDetail = null
         runtimeReportDetailMessage = ""
         scope.launch {
@@ -935,6 +920,74 @@ class TaskControlPanelGlobalOverlay(
             runtimeReportDetail = detail
             settingsRoute = SettingsRoute.ReportHistoryDetail(reportId = reportId)
             touchUi()
+        }
+    }
+
+    private fun requestRuntimeReportDelete(reportId: String) {
+        settingsModal = SettingsModal.ConfirmDeleteRuntimeReport(reportId = reportId)
+        touchUi()
+    }
+
+    private fun dismissSettingsModal(removeOverlayWhenIdle: Boolean = false) {
+        if (settingsModal == null) {
+            if (removeOverlayWhenIdle && !settingsVisible) {
+                pendingSettingsOverlayRemoval = true
+                removeSettingsOverlayIfIdle()
+            }
+            return
+        }
+        settingsModal = null
+        if (removeOverlayWhenIdle && !settingsVisible) {
+            pendingSettingsOverlayRemoval = true
+        }
+        touchUi()
+    }
+
+    private fun onSettingsModalAction(actionKey: String) {
+        val modal = settingsModal ?: return
+        when (modal) {
+            is SettingsModal.ConfirmStartTask -> {
+                when (actionKey) {
+                    MODAL_ACTION_CANCEL -> {
+                        dismissSettingsModal(removeOverlayWhenIdle = !settingsVisible)
+                        return
+                    }
+
+                    MODAL_ACTION_CONFIRM -> {
+                        dismissSettingsModal(removeOverlayWhenIdle = !settingsVisible)
+                        scope.launch {
+                            delay(MODAL_EXIT_DELAY_MS)
+                            startLastTask(preferredTaskId = modal.taskId)
+                        }
+                        return
+                    }
+                }
+            }
+
+            is SettingsModal.ConfirmDeleteRuntimeReport -> {
+                when (actionKey) {
+                    MODAL_ACTION_CANCEL -> {
+                        dismissSettingsModal(removeOverlayWhenIdle = !settingsVisible)
+                        return
+                    }
+
+                    MODAL_ACTION_CONFIRM -> {
+                        dismissSettingsModal(removeOverlayWhenIdle = !settingsVisible)
+                        scope.launch {
+                            delay(MODAL_EXIT_DELAY_MS)
+                            deleteRuntimeReport(modal.reportId)
+                        }
+                        return
+                    }
+                }
+            }
+
+            is SettingsModal.Success,
+            is SettingsModal.Failure,
+            -> {
+                dismissSettingsModal(removeOverlayWhenIdle = !settingsVisible)
+                return
+            }
         }
     }
 
@@ -972,7 +1025,7 @@ class TaskControlPanelGlobalOverlay(
             touchUi()
             return
         }
-        if (recordingSaveDialogVisible || startTaskConfirmDialogVisible || panelMode == PanelMode.RECORDING) {
+        if (recordingSaveDialogVisible || settingsModal != null || panelMode == PanelMode.RECORDING) {
             return
         }
         panelNeedsEntryAnimation = false
@@ -1022,8 +1075,8 @@ class TaskControlPanelGlobalOverlay(
             discardRecordingSession("已取消保存")
             return
         }
-        if (startTaskConfirmDialogVisible) {
-            dismissStartTaskConfirmDialogWithAnimation(removeOverlayWhenIdle = !settingsVisible)
+        if (settingsModal != null) {
+            dismissSettingsModal(removeOverlayWhenIdle = !settingsVisible)
             return
         }
         if (!settingsVisible) {
@@ -1138,7 +1191,7 @@ class TaskControlPanelGlobalOverlay(
             !panelDismissAnimating &&
             !settingsVisible &&
             !recordingSaveDialogVisible &&
-            !startTaskConfirmDialogVisible
+            settingsModal == null
         val panelAlpha by animateFloatAsState(
             targetValue = if (panelVisible) 1f else 0f,
             animationSpec = tween(durationMillis = 180),
@@ -1435,12 +1488,14 @@ class TaskControlPanelGlobalOverlay(
 
     @Composable
     private fun SettingsOverlayContent() {
+        val activeSettingsModal = settingsModal
+        val settingsModalVisible = activeSettingsModal != null
+        val settingsModalModel = buildSettingsModalModel(activeSettingsModal)
         if (
             !settingsVisible &&
             !recordingSaveDialogVisible &&
             !recordingSaveDialogAnimatingOut &&
-            !startTaskConfirmDialogVisible &&
-            !startTaskConfirmDialogAnimatingOut &&
+            !settingsModalVisible &&
             !clickPickerVisible &&
             !pendingSettingsOverlayRemoval
         ) {
@@ -1456,22 +1511,16 @@ class TaskControlPanelGlobalOverlay(
             delay(RECORDING_SAVE_DIALOG_ENTER_DELAY_MS)
             dialogEntered = true
         }
-        val startTaskDialogOpenToken = startTaskConfirmDialogOpenToken
-        var startTaskDialogEntered by remember(startTaskDialogOpenToken) { mutableStateOf(false) }
-        LaunchedEffect(startTaskDialogOpenToken, startTaskConfirmDialogVisible) {
-            if (!startTaskConfirmDialogVisible) {
-                return@LaunchedEffect
-            }
-            startTaskDialogEntered = false
-            delay(RECORDING_SAVE_DIALOG_ENTER_DELAY_MS)
-            startTaskDialogEntered = true
-        }
         val recordingDialogVisible = recordingSaveDialogVisible && dialogEntered
         val recordingDialogTransitionState = remember { MutableTransitionState(false) }
         recordingDialogTransitionState.targetState = recordingDialogVisible
-        val startTaskDialogVisible = startTaskConfirmDialogVisible && startTaskDialogEntered
-        val startTaskDialogTransitionState = remember { MutableTransitionState(false) }
-        startTaskDialogTransitionState.targetState = startTaskDialogVisible
+        val settingsModalTransitionState = remember { MutableTransitionState(false) }
+        settingsModalTransitionState.targetState = settingsModalVisible
+        if (settingsModalVisible && settingsModalModel == null) {
+            LaunchedEffect(activeSettingsModal) {
+                dismissSettingsModal(removeOverlayWhenIdle = !settingsVisible)
+            }
+        }
         if (
             recordingSaveDialogAnimatingOut &&
             recordingDialogTransitionState.isIdle &&
@@ -1479,25 +1528,20 @@ class TaskControlPanelGlobalOverlay(
         ) {
             LaunchedEffect(Unit) { onRecordingSaveDialogExitAnimationSettled() }
         }
-        if (
-            startTaskConfirmDialogAnimatingOut &&
-            startTaskDialogTransitionState.isIdle &&
-            !startTaskDialogTransitionState.currentState
-        ) {
-            LaunchedEffect(Unit) { onStartTaskConfirmDialogExitAnimationSettled() }
-        }
         val effectiveSheetVisible = settingsVisible && settingsSheetVisible
-        val dialogVisible = recordingDialogTransitionState.currentState ||
-            recordingDialogTransitionState.targetState ||
-            startTaskDialogTransitionState.currentState ||
-            startTaskDialogTransitionState.targetState
+        val recordingDialogOverlayVisible = recordingDialogTransitionState.currentState ||
+            recordingDialogTransitionState.targetState
+        val settingsModalOverlayVisible = settingsModalTransitionState.currentState ||
+            settingsModalTransitionState.targetState
+        val dialogVisible = recordingDialogOverlayVisible || settingsModalOverlayVisible
         val anyAuxContentVisible = effectiveSheetVisible ||
             dialogVisible ||
             clickPickerVisible
         val route = settingsRoute
+        // ModalHost has its own full-screen scrim. Keep base scrim for sheet/recording dialog only.
         val scrimTargetAlpha = when {
             clickPickerVisible -> CLICK_PICKER_SCRIM_ALPHA
-            dialogVisible -> AUX_OVERLAY_SCRIM_ALPHA
+            recordingDialogOverlayVisible -> AUX_OVERLAY_SCRIM_ALPHA
             effectiveSheetVisible -> OverlayStackMotion.SHEET_SCRIM_ALPHA
             else -> 0f
         }
@@ -1716,24 +1760,12 @@ class TaskControlPanelGlobalOverlay(
             ) {
                 RecordingSaveDialogCard()
             }
-            AnimatedVisibilityBox(
-                visibleState = startTaskDialogTransitionState,
-                enter = fadeIn(animationSpec = tween(durationMillis = 160)) + slideInVertically(
-                    animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
-                    initialOffsetY = { fullHeight -> (fullHeight * 0.08f).roundToInt() },
-                ),
-                exit = fadeOut(animationSpec = tween(durationMillis = 120)) + slideOutVertically(
-                    animationSpec = tween(durationMillis = 120, easing = FastOutSlowInEasing),
-                    targetOffsetY = { fullHeight -> (fullHeight * 0.05f).roundToInt() },
-                ),
-                modifier = Modifier
-                    .align(Alignment.Center)
-                    .padding(horizontal = 18.dp)
-                    .fillMaxWidth()
-                    .widthIn(max = 420.dp),
-            ) {
-                StartTaskConfirmDialogCard()
-            }
+            TaskControlModalHost(
+                visibleState = settingsModalTransitionState,
+                model = settingsModalModel,
+                onDismissRequest = { dismissSettingsModal(removeOverlayWhenIdle = !settingsVisible) },
+                onAction = ::onSettingsModalAction,
+            )
             if (clickPickerVisible) {
                 ClickPositionPickerLayer()
             }
@@ -1808,37 +1840,6 @@ class TaskControlPanelGlobalOverlay(
                 actions()
             }
         }
-    }
-
-    @Composable
-    private fun StartTaskConfirmDialogCard() {
-        OverlayDialogCardScaffold(
-            title = "确认开始任务",
-            description = "是否开始执行任务：${startTaskConfirmTaskName.ifBlank { "未命名任务" }}",
-            actions = {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    OutlinedButton(
-                        modifier = Modifier.weight(1f),
-                        onClick = {
-                            dismissStartTaskConfirmDialogWithAnimation(
-                                removeOverlayWhenIdle = !settingsVisible,
-                            )
-                        },
-                    ) {
-                        Text("取消")
-                    }
-                    OutlinedButton(
-                        modifier = Modifier.weight(1f),
-                        onClick = { confirmStartTaskFromDialog() },
-                    ) {
-                        Text("开始")
-                    }
-                }
-            },
-        )
     }
 
     @Composable
@@ -2176,7 +2177,7 @@ class TaskControlPanelGlobalOverlay(
                 refreshRuntimeReportHistory(message = "已刷新", withCount = true)
             },
             onOpenDetail = ::openRuntimeReportDetail,
-            onDelete = ::deleteRuntimeReport,
+            onDeleteRequest = ::requestRuntimeReportDelete,
         )
     }
 
@@ -2195,6 +2196,83 @@ class TaskControlPanelGlobalOverlay(
             onOpenPrev = ::openPrevRuntimeReportDetail,
             onOpenNext = ::openNextRuntimeReportDetail,
         )
+    }
+
+    private fun buildSettingsModalModel(
+        modal: SettingsModal?,
+    ): TaskControlModalModel? {
+        return when (modal) {
+            null -> null
+            is SettingsModal.ConfirmStartTask -> {
+                TaskControlModalModel(
+                    title = "确认开始任务",
+                    message = "是否开始执行任务：${modal.taskName.ifBlank { "未命名任务" }}",
+                    tone = TaskControlModalTone.DEFAULT,
+                    dismissOnBackdropTap = true,
+                    actions = listOf(
+                        TaskControlModalAction(
+                            key = MODAL_ACTION_CANCEL,
+                            text = "取消",
+                        ),
+                        TaskControlModalAction(
+                            key = MODAL_ACTION_CONFIRM,
+                            text = "开始",
+                        ),
+                    ),
+                )
+            }
+
+            is SettingsModal.ConfirmDeleteRuntimeReport -> {
+                val pendingItem = runtimeReportHistory.firstOrNull { it.reportId == modal.reportId }
+                    ?: return null
+                TaskControlModalModel(
+                    title = "删除历史记录",
+                    message = "确认删除这条历史记录吗？\n${pendingItem.reportId}",
+                    tone = TaskControlModalTone.WARNING,
+                    dismissOnBackdropTap = true,
+                    actions = listOf(
+                        TaskControlModalAction(
+                            key = MODAL_ACTION_CANCEL,
+                            text = "取消",
+                        ),
+                        TaskControlModalAction(
+                            key = MODAL_ACTION_CONFIRM,
+                            text = "确认删除",
+                        ),
+                    ),
+                )
+            }
+
+            is SettingsModal.Success -> {
+                TaskControlModalModel(
+                    title = modal.title,
+                    message = modal.message,
+                    tone = TaskControlModalTone.SUCCESS,
+                    dismissOnBackdropTap = true,
+                    actions = listOf(
+                        TaskControlModalAction(
+                            key = MODAL_ACTION_CONFIRM,
+                            text = "知道了",
+                        ),
+                    ),
+                )
+            }
+
+            is SettingsModal.Failure -> {
+                TaskControlModalModel(
+                    title = modal.title,
+                    message = modal.message,
+                    tone = TaskControlModalTone.FAILURE,
+                    dismissOnBackdropTap = true,
+                    actions = listOf(
+                        TaskControlModalAction(
+                            key = MODAL_ACTION_CONFIRM,
+                            text = "知道了",
+                        ),
+                    ),
+                )
+            }
+        }
     }
 
     private fun currentScreenSizePx(): Pair<Int, Int> {
@@ -2272,7 +2350,7 @@ class TaskControlPanelGlobalOverlay(
     }
 
     private fun promptStartLastTaskConfirmation() {
-        if (running || settingsVisible || panelMode == PanelMode.RECORDING) {
+        if (running || settingsVisible || panelMode == PanelMode.RECORDING || settingsModal != null) {
             return
         }
         val candidateTaskId = resolveCandidateTaskId()
@@ -2284,17 +2362,11 @@ class TaskControlPanelGlobalOverlay(
         val taskName = tasks.firstOrNull { it.taskId == candidateTaskId }?.name ?: "未命名任务"
         ensureSettingsOverlayView()
         pendingSettingsOverlayRemoval = false
-        startTaskConfirmTaskName = taskName
-        startTaskConfirmDialogOpenToken++
-        startTaskConfirmDialogAnimatingOut = false
-        removeSettingsOverlayAfterStartConfirmDialogExit = false
-        startTaskConfirmDialogVisible = true
+        settingsModal = SettingsModal.ConfirmStartTask(
+            taskId = candidateTaskId,
+            taskName = taskName,
+        )
         touchUi()
-    }
-
-    private fun confirmStartTaskFromDialog() {
-        dismissStartTaskConfirmDialogWithAnimation(removeOverlayWhenIdle = !settingsVisible)
-        startLastTask()
     }
 
     private fun beginRunningPanel(task: TaskRecord) {
@@ -2443,14 +2515,14 @@ class TaskControlPanelGlobalOverlay(
         )
     }
 
-    private fun startLastTask() {
+    private fun startLastTask(preferredTaskId: String? = null) {
         if (running || runTaskJob?.isActive == true) {
             return
         }
         runTaskJob = scope.launch {
             val launchJob = this
             try {
-                val candidateTaskId = resolveCandidateTaskId()
+                val candidateTaskId = preferredTaskId ?: resolveCandidateTaskId()
                 if (candidateTaskId == null) {
                     statusText = "没有可执行任务"
                     touchUi()
@@ -2624,7 +2696,7 @@ class TaskControlPanelGlobalOverlay(
         if (recording || running) {
             return
         }
-        dismissStartTaskConfirmDialogWithAnimation(removeOverlayWhenIdle = !settingsVisible)
+        dismissSettingsModal(removeOverlayWhenIdle = !settingsVisible)
         recordingPaused = false
         replayingGesture = false
         recordedGestures.clear()

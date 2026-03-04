@@ -6,17 +6,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -32,11 +27,8 @@ internal fun TaskControlRuntimeReportHistoryPage(
     statusMessage: String,
     onRefresh: () -> Unit,
     onOpenDetail: (String) -> Unit,
-    onDelete: (String) -> Unit,
+    onDeleteRequest: (String) -> Unit,
 ) {
-    var pendingDeleteReportId by remember { mutableStateOf<String?>(null) }
-    val pendingDeleteItem = history.firstOrNull { it.reportId == pendingDeleteReportId }
-
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -127,7 +119,7 @@ internal fun TaskControlRuntimeReportHistoryPage(
                         }
                         OutlinedButton(
                             modifier = Modifier.weight(1f),
-                            onClick = { pendingDeleteReportId = item.reportId },
+                            onClick = { onDeleteRequest(item.reportId) },
                         ) {
                             Text("删除")
                         }
@@ -137,29 +129,6 @@ internal fun TaskControlRuntimeReportHistoryPage(
         }
     }
 
-    if (pendingDeleteItem != null) {
-        AlertDialog(
-            onDismissRequest = { pendingDeleteReportId = null },
-            title = { Text("删除历史记录") },
-            text = { Text("确认删除这条历史记录吗？\n${pendingDeleteItem.reportId}") },
-            confirmButton = {
-                OutlinedButton(
-                    onClick = {
-                        val reportId = pendingDeleteItem.reportId
-                        pendingDeleteReportId = null
-                        onDelete(reportId)
-                    },
-                ) {
-                    Text("确认删除")
-                }
-            },
-            dismissButton = {
-                OutlinedButton(onClick = { pendingDeleteReportId = null }) {
-                    Text("取消")
-                }
-            },
-        )
-    }
 }
 
 private fun formatEpochMs(value: Long?): String {

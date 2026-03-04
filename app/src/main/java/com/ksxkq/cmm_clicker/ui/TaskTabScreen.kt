@@ -31,7 +31,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
 import com.ksxkq.cmm_clicker.feature.task.TaskRecord
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -331,43 +330,41 @@ private fun DeleteTaskConfirmDialog(
     onCancel: () -> Unit,
     onConfirm: () -> Unit,
 ) {
-    Dialog(onDismissRequest = onCancel) {
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+            Text(
+                text = "确认删除任务",
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                text = "将删除任务：$taskName",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text(
-                    text = "确认删除任务",
-                    style = MaterialTheme.typography.titleMedium,
+                ActionButton(
+                    text = "取消",
+                    modifier = Modifier.weight(1f),
+                    onClick = onCancel,
                 )
-                Text(
-                    text = "将删除任务：$taskName",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                Button(
+                    modifier = Modifier.weight(1f),
+                    onClick = onConfirm,
                 ) {
-                    ActionButton(
-                        text = "取消",
-                        modifier = Modifier.weight(1f),
-                        onClick = onCancel,
-                    )
-                    Button(
-                        modifier = Modifier.weight(1f),
-                        onClick = onConfirm,
-                    ) {
-                        Text("确认删除")
-                    }
+                    Text("确认删除")
                 }
             }
         }
@@ -381,45 +378,43 @@ private fun RenameTaskDialog(
     onCancel: () -> Unit,
     onConfirm: () -> Unit,
 ) {
-    Dialog(onDismissRequest = onCancel) {
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+            Text(
+                text = "重命名任务",
+                style = MaterialTheme.typography.titleMedium,
+            )
+            OutlinedTextField(
+                value = name,
+                onValueChange = onNameChange,
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("任务名称") },
+                singleLine = true,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text(
-                    text = "重命名任务",
-                    style = MaterialTheme.typography.titleMedium,
+                ActionButton(
+                    text = "取消",
+                    modifier = Modifier.weight(1f),
+                    onClick = onCancel,
                 )
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = onNameChange,
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("任务名称") },
-                    singleLine = true,
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                Button(
+                    modifier = Modifier.weight(1f),
+                    onClick = onConfirm,
                 ) {
-                    ActionButton(
-                        text = "取消",
-                        modifier = Modifier.weight(1f),
-                        onClick = onCancel,
-                    )
-                    Button(
-                        modifier = Modifier.weight(1f),
-                        onClick = onConfirm,
-                    ) {
-                        Text("保存")
-                    }
+                    Text("保存")
                 }
             }
         }

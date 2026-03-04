@@ -516,6 +516,28 @@
 447. 操作收敛：按需求移除历史列表与历史详情中的【复制 JSON】入口，避免暴露不需要的操作。
 448. 删除崩溃修复：`SharedOverlayDialogScaffold` 内容区滚动改为“仅在高度有限时启用 `verticalScroll`”，规避删除后重组阶段出现无限高度约束导致的 `IllegalStateException`。
 449. 稳定性验证：以上“去除复制 JSON + 详情上下条 + 删除崩溃修复”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+450. BadToken 崩溃修复（浮窗环境）：将历史记录删除确认、动作删除确认从 `AlertDialog` 改为同层内嵌确认卡片，避免在 `TYPE_ACCESSIBILITY_OVERLAY` 下创建应用窗口导致 `WindowManager$BadTokenException`。
+451. 任务管理弹窗兼容修复：`TaskLibraryPanel` 的“重命名任务/删除任务”由 `Dialog` 改为同层卡片确认，统一采用 overlay-safe 交互模型，避免后续同类 token 崩溃。
+452. 稳定性验证：以上“overlay-safe 确认弹层收敛”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+453. 历史删除确认弹层重做：删除确认从“列表底部内联 item”改为“同层居中模态卡片 + 遮罩点击取消”，视觉回到弹窗语义且继续保持 overlay-safe。
+454. 状态上提：历史删除确认状态由页面局部状态提升到 `TaskControlPanelGlobalOverlay`，在 `SettingsActionListLayer` 顶层统一渲染，避免随滚动流布局漂移到底部。
+455. 稳定性验证：以上“历史删除确认弹层重做”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+456. 模态层范围修正：历史删除确认弹层从 `SettingsActionListLayer`（卡片内部范围）迁移到 `SettingsOverlayContent` 顶层，半透明背景改为覆盖整个 addView 全屏范围。
+457. 动画补齐：历史删除确认弹层接入与其它弹层一致的 `AnimatedVisibility` 进入/退出（fade + vertical slide），消除“无动画”问题。
+458. 稳定性验证：以上“全屏模态范围 + 弹层动画”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+459. 统一模态管理升级：新增 `TaskControlPanelModalHost`（`TaskControlModalModel/Action/Tone`），将删除确认、开始任务确认统一收敛到同一套 modal 状态与渲染管线，支持后续扩展成功/失败提示弹窗。
+460. 开始任务确认重构：移除 `startTaskConfirmDialog*` 独立状态机与专用卡片，改为 `SettingsModal.ConfirmStartTask`，统一走全屏遮罩 + 居中卡片 + 进出动画；确认时按弹窗绑定 `taskId` 执行，避免状态漂移启动错误任务。
+461. Overlay 全屏遮罩一致性修复：`SettingsOverlayContent` 仅保留一套全屏 scrim 计算与 modal 过渡状态，关闭流程改为“等待退出动画完成后移除 addView”，解决半透明背景提前消失与层级割裂问题。
+462. 稳定性验证：以上“开始确认弹窗并入统一 ModalHost + 全屏遮罩一致化”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+463. 模态退出残留修复：`TaskControlModalHost` 增加“退出阶段模型保留”机制（`retainedModel`），避免 `model=null` 时提前 uncompose 导致 `MutableTransitionState` 卡在过渡态，进而阻塞 overlay 移除。
+464. 交互残留修复：在模态过渡结束后才清空保留模型，确保 scrim 与卡片退出动画正常收敛，不再出现“页面已关闭但仍有透明/半透明遮罩拦截触摸”。
+465. 稳定性验证：以上“模态退出残留修复”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+466. 浮层残留回收补丁：`TaskControlModalHost` 的 `onDismissRequest` 统一改为 `dismissSettingsModal(removeOverlayWhenIdle = !settingsVisible)`，确保“无遮罩页面”场景也会进入 overlay 回收条件，不再留下透明拦截层。
+467. 删除确认动效连续性优化：确认动作改为“先关闭 modal，等待 `MODAL_EXIT_DELAY_MS` 后执行删除/启动任务”，避免数据刷新与路由变更抢占退出过渡，修复“消失动画被打断”的观感。
+468. 稳定性验证：以上“浮层回收 + 动效连续性”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+469. 双层 scrim 叠加修复：`SettingsOverlayContent` 在 `settingsModal` 场景不再驱动基础 scrim 动画，仅保留 `TaskControlModalHost` 的全屏 scrim，避免“先亮一下/停顿/再继续”式非连贯背景过渡。
+470. 背景动效职责拆分：基础 scrim 仅服务于设置页 sheet 与录制保存弹层；确认类 modal 的背景动画完全由 `ModalHost` 承担，统一时序并减少叠加闪烁。
+471. 稳定性验证：以上“确认弹窗背景动画连贯性”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
 
 ## 3. 正在进行
 

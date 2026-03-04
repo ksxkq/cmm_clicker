@@ -183,8 +183,6 @@ class TaskControlPanelGlobalOverlay(
         private const val CLICK_PICKER_SCRIM_ALPHA = 0.08f
         private const val ACTION_LIST_MAX_VISIBLE_JUMP_LANES = 3
         private const val RUNTIME_REPORT_HISTORY_LIMIT = 80
-        private const val MODAL_ACTION_CANCEL = "cancel"
-        private const val MODAL_ACTION_CONFIRM = "confirm"
         private const val MODAL_EXIT_DELAY_MS = 130L
         private const val PANEL_VISIBILITY_TRACE_LIMIT = 180
     }
@@ -243,45 +241,6 @@ class TaskControlPanelGlobalOverlay(
         val settingsOverlayAttached: Boolean,
     )
 
-    private sealed interface SettingsRoute {
-        data object TaskList : SettingsRoute
-
-        data object ActionList : SettingsRoute
-
-        data object RunHistory : SettingsRoute
-
-        data object ReportHistory : SettingsRoute
-
-        data class ReportHistoryDetail(
-            val reportId: String,
-        ) : SettingsRoute
-
-        data class NodeEditor(
-            val nodeId: String,
-        ) : SettingsRoute
-    }
-
-    private sealed interface SettingsModal {
-        data class ConfirmStartTask(
-            val taskId: String,
-            val taskName: String,
-        ) : SettingsModal
-
-        data class ConfirmDeleteRuntimeReport(
-            val reportId: String,
-        ) : SettingsModal
-
-        data class Success(
-            val title: String,
-            val message: String,
-        ) : SettingsModal
-
-        data class Failure(
-            val title: String,
-            val message: String,
-        ) : SettingsModal
-    }
-
     private val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private val taskRepository = LocalFileTaskRepository(context)
     private val runtimeRunReportRepository = RuntimeRunReportRepository(context)
@@ -334,16 +293,7 @@ class TaskControlPanelGlobalOverlay(
     private var recordedStepCount by mutableIntStateOf(0)
     private var recordingElapsedMs by mutableLongStateOf(0L)
     private var statusText by mutableStateOf("")
-    private var currentRunTraceId by mutableStateOf("")
-    private var currentRunTaskId by mutableStateOf("")
-    private var currentRunTaskName by mutableStateOf("")
-    private var currentRunStatus by mutableStateOf("")
-    private var currentRunStepCount by mutableIntStateOf(0)
-    private var currentRunStartedAtEpochMs by mutableLongStateOf(0L)
-    private var currentRunFinishedAtEpochMs by mutableLongStateOf(0L)
-    private var currentRunMessage by mutableStateOf("")
-    private var currentRunErrorCode by mutableStateOf("")
-    private var currentRunEvents by mutableStateOf<List<RuntimeTraceEvent>>(emptyList())
+    private var currentRunSessionState by mutableStateOf(CurrentRunSessionState())
     private var runtimeReportHistory by mutableStateOf<List<RuntimeRunReportSummary>>(emptyList())
     private var runtimeReportHistoryMessage by mutableStateOf("")
     private var runtimeReportHistoryTaskId by mutableStateOf<String?>(null)
@@ -603,14 +553,18 @@ class TaskControlPanelGlobalOverlay(
         )
     }
 
-    private fun minimizeSettingsOverlay() {
-        if (!settingsVisible || settingsDismissAnimating) {
-            return
+    private fun startSettingsSheetEnterAnimation(delayMs: Long = 16L) {
+        scope.launch {
+            delay(delayMs)
+            settingsSheetVisible = true
+            touchUi()
         }
-        setPanelDisplayMode(
-            mode = PanelDisplayMode.MINI,
-            reason = "minimize_settings_overlay",
-        )
+    }
+
+    private fun animateSettingsOverlayDismiss(
+        reason: String,
+        afterDismiss: () -> Unit,
+    ) {
         settingsDismissAnimating = true
         settingsSheetVisible = false
         touchUi()
@@ -619,13 +573,30 @@ class TaskControlPanelGlobalOverlay(
             settingsVisible = false
             settingsSheetVisible = false
             settingsDismissAnimating = false
+            afterDismiss()
+            recordPanelVisibilityEvent(
+                event = "settings_panel.dismiss.settled",
+                reason = reason,
+            )
+            touchUi()
+        }
+    }
+
+    private fun minimizeSettingsOverlay() {
+        if (!settingsVisible || settingsDismissAnimating) {
+            return
+        }
+        setPanelDisplayMode(
+            mode = PanelDisplayMode.MINI,
+            reason = "minimize_settings_overlay",
+        )
+        animateSettingsOverlayDismiss(reason = "minimize_settings_overlay") {
             setPanelHideReason(PanelHideReason.SETTINGS_OPEN, hidden = false)
             setPendingSettingsOverlayRemoval(
                 pending = false,
                 reason = "minimize_settings_overlay_complete",
             )
             setSettingsOverlayInteractionEnabled(enabled = false)
-            touchUi()
         }
     }
 
@@ -653,11 +624,7 @@ class TaskControlPanelGlobalOverlay(
         settingsSheetVisible = false
         setPanelHideReason(PanelHideReason.SETTINGS_OPEN, hidden = true)
         touchUi()
-        scope.launch {
-            delay(16)
-            settingsSheetVisible = true
-            touchUi()
-        }
+        startSettingsSheetEnterAnimation()
     }
 
     private fun minimizeRunningPanel() {
@@ -912,13 +879,16 @@ class TaskControlPanelGlobalOverlay(
         if (!pendingSettingsOverlayRemoval) {
             return
         }
-        if (
-            settingsVisible ||
-            recordingSaveDialogVisible ||
-            recordingSaveDialogAnimatingOut ||
-            settingsModal != null
-        ) {
-            val blockSignature = "settings=$settingsVisible,dialog=$recordingSaveDialogVisible,anim=$recordingSaveDialogAnimatingOut,modal=${settingsModal != null}"
+        val lifecycleState = SettingsOverlayLifecycleState(
+            settingsVisible = settingsVisible,
+            recordingDialogVisible = recordingSaveDialogVisible,
+            recordingDialogAnimatingOut = recordingSaveDialogAnimatingOut,
+            hasModal = settingsModal != null,
+            clickPickerVisible = clickPickerVisible,
+            pendingRemoval = pendingSettingsOverlayRemoval,
+        )
+        val blockSignature = settingsOverlayRemovalBlockSignature(lifecycleState)
+        if (blockSignature != null) {
             if (settingsOverlayIdleBlockSignature != blockSignature) {
                 settingsOverlayIdleBlockSignature = blockSignature
                 recordPanelVisibilityEvent(
@@ -1063,6 +1033,32 @@ class TaskControlPanelGlobalOverlay(
             .apply()
     }
 
+    private fun showSettingsOverlayRoute(
+        route: SettingsRoute,
+        reason: String,
+    ) {
+        setPanelDisplayMode(
+            mode = PanelDisplayMode.FULL,
+            reason = reason,
+        )
+        panelNeedsEntryAnimation = false
+        settingsVisible = true
+        settingsDismissAnimating = false
+        settingsSheetVisible = false
+        setSettingsOverlayInteractionEnabled(enabled = true)
+        setPanelHideReason(PanelHideReason.SETTINGS_OPEN, hidden = true)
+        settingsRoute = route
+        settingsTask = null
+        settingsEditorStore = null
+        setPendingSettingsOverlayRemoval(
+            pending = false,
+            reason = reason,
+        )
+        ensureSettingsOverlayView()
+        touchUi()
+        startSettingsSheetEnterAnimation()
+    }
+
     private fun openSettingsPanel() {
         if (
             settingsVisible ||
@@ -1076,34 +1072,14 @@ class TaskControlPanelGlobalOverlay(
             event = "settings_panel.open",
             reason = "from_main_panel",
         )
-        setPanelDisplayMode(
-            mode = PanelDisplayMode.FULL,
+        showSettingsOverlayRoute(
+            route = SettingsRoute.TaskList,
             reason = "open_settings_panel",
         )
-        panelNeedsEntryAnimation = false
-        settingsVisible = true
-        settingsDismissAnimating = false
-        settingsSheetVisible = false
-        setSettingsOverlayInteractionEnabled(enabled = true)
-        setPanelHideReason(PanelHideReason.SETTINGS_OPEN, hidden = true)
-        settingsRoute = SettingsRoute.TaskList
-        settingsTask = null
-        settingsEditorStore = null
-        setPendingSettingsOverlayRemoval(
-            pending = false,
-            reason = "open_settings_panel",
-        )
-        ensureSettingsOverlayView()
-        touchUi()
-        scope.launch {
-            delay(16)
-            settingsSheetVisible = true
-            touchUi()
-        }
     }
 
     private fun hasCurrentRunSession(): Boolean {
-        return currentRunStartedAtEpochMs > 0L || currentRunEvents.isNotEmpty()
+        return currentRunSessionState.hasSession()
     }
 
     private suspend fun loadRuntimeReportHistory(
@@ -1197,30 +1173,10 @@ class TaskControlPanelGlobalOverlay(
         if (recordingSaveDialogVisible || settingsModal != null || panelMode == PanelMode.RECORDING) {
             return
         }
-        setPanelDisplayMode(
-            mode = PanelDisplayMode.FULL,
+        showSettingsOverlayRoute(
+            route = SettingsRoute.ReportHistory,
             reason = "open_report_history_overlay",
         )
-        panelNeedsEntryAnimation = false
-        settingsVisible = true
-        settingsDismissAnimating = false
-        settingsSheetVisible = false
-        setSettingsOverlayInteractionEnabled(enabled = true)
-        setPanelHideReason(PanelHideReason.SETTINGS_OPEN, hidden = true)
-        settingsRoute = SettingsRoute.ReportHistory
-        settingsTask = null
-        settingsEditorStore = null
-        setPendingSettingsOverlayRemoval(
-            pending = false,
-            reason = "open_report_history_overlay",
-        )
-        ensureSettingsOverlayView()
-        touchUi()
-        scope.launch {
-            delay(16)
-            settingsSheetVisible = true
-            touchUi()
-        }
     }
 
     private fun openTaskReportHistoryOverlay(taskId: String) {
@@ -1306,65 +1262,45 @@ class TaskControlPanelGlobalOverlay(
             event = "settings_modal.action",
             reason = "${modal::class.simpleName ?: "Unknown"}:$actionKey",
         )
-        when (modal) {
-            is SettingsModal.ConfirmStartTask -> {
-                when (actionKey) {
-                    MODAL_ACTION_CANCEL -> {
-                        dismissSettingsModal(removeOverlayWhenIdle = !settingsVisible)
-                        return
-                    }
-
-                    MODAL_ACTION_CONFIRM -> {
-                        dismissSettingsModal(removeOverlayWhenIdle = !settingsVisible)
-                        scope.launch {
-                            delay(MODAL_EXIT_DELAY_MS)
-                            startLastTask(preferredTaskId = modal.taskId)
-                        }
-                        return
-                    }
+        val resolvedAction = resolveSettingsModalAction(
+            modal = modal,
+            actionKey = actionKey,
+        ) ?: return
+        dismissSettingsModal(removeOverlayWhenIdle = !settingsVisible)
+        when (resolvedAction) {
+            SettingsModalAction.Dismiss -> return
+            is SettingsModalAction.StartTask -> {
+                scope.launch {
+                    delay(MODAL_EXIT_DELAY_MS)
+                    startLastTask(preferredTaskId = resolvedAction.taskId)
                 }
+                return
             }
 
-            is SettingsModal.ConfirmDeleteRuntimeReport -> {
-                when (actionKey) {
-                    MODAL_ACTION_CANCEL -> {
-                        dismissSettingsModal(removeOverlayWhenIdle = !settingsVisible)
-                        return
-                    }
-
-                    MODAL_ACTION_CONFIRM -> {
-                        dismissSettingsModal(removeOverlayWhenIdle = !settingsVisible)
-                        scope.launch {
-                            delay(MODAL_EXIT_DELAY_MS)
-                            deleteRuntimeReport(modal.reportId)
-                        }
-                        return
-                    }
+            is SettingsModalAction.DeleteRuntimeReport -> {
+                scope.launch {
+                    delay(MODAL_EXIT_DELAY_MS)
+                    deleteRuntimeReport(resolvedAction.reportId)
                 }
-            }
-
-            is SettingsModal.Success,
-            is SettingsModal.Failure,
-            -> {
-                dismissSettingsModal(removeOverlayWhenIdle = !settingsVisible)
                 return
             }
         }
     }
 
     private fun openAdjacentRuntimeReportDetail(direction: Int) {
-        val currentReportId = runtimeReportDetail?.reportId
-            ?: (settingsRoute as? SettingsRoute.ReportHistoryDetail)?.reportId
-            ?: return
-        val currentIndex = runtimeReportHistory.indexOfFirst { it.reportId == currentReportId }
-        if (currentIndex < 0) {
+        val currentReportId = resolveCurrentRuntimeReportId(
+            detail = runtimeReportDetail,
+            route = settingsRoute,
+        )
+        val targetReportId = resolveAdjacentRuntimeReportId(
+            history = runtimeReportHistory,
+            currentReportId = currentReportId,
+            direction = direction,
+        ) ?: return
+        if (targetReportId.isBlank()) {
             return
         }
-        val targetIndex = currentIndex + direction
-        if (targetIndex !in runtimeReportHistory.indices) {
-            return
-        }
-        openRuntimeReportDetail(runtimeReportHistory[targetIndex].reportId)
+        openRuntimeReportDetail(targetReportId)
     }
 
     private fun openPrevRuntimeReportDetail() {
@@ -1393,30 +1329,10 @@ class TaskControlPanelGlobalOverlay(
         if (recordingSaveDialogVisible || settingsModal != null || panelMode == PanelMode.RECORDING) {
             return
         }
-        setPanelDisplayMode(
-            mode = PanelDisplayMode.FULL,
+        showSettingsOverlayRoute(
+            route = SettingsRoute.RunHistory,
             reason = "open_run_history_overlay",
         )
-        panelNeedsEntryAnimation = false
-        settingsVisible = true
-        settingsDismissAnimating = false
-        settingsSheetVisible = false
-        setSettingsOverlayInteractionEnabled(enabled = true)
-        setPanelHideReason(PanelHideReason.SETTINGS_OPEN, hidden = true)
-        settingsRoute = SettingsRoute.RunHistory
-        settingsTask = null
-        settingsEditorStore = null
-        setPendingSettingsOverlayRemoval(
-            pending = false,
-            reason = "open_run_history_overlay",
-        )
-        ensureSettingsOverlayView()
-        touchUi()
-        scope.launch {
-            delay(16)
-            settingsSheetVisible = true
-            touchUi()
-        }
     }
 
     private fun closeSettingsPanel(afterClosed: (() -> Unit)? = null) {
@@ -1431,14 +1347,7 @@ class TaskControlPanelGlobalOverlay(
             mode = PanelDisplayMode.FULL,
             reason = "close_settings_panel",
         )
-        settingsDismissAnimating = true
-        settingsSheetVisible = false
-        touchUi()
-        scope.launch {
-            delay(200)
-            settingsVisible = false
-            settingsSheetVisible = false
-            settingsDismissAnimating = false
+        animateSettingsOverlayDismiss(reason = "close_settings_panel") {
             setPanelHideReason(PanelHideReason.SETTINGS_OPEN, hidden = false)
             settingsRoute = SettingsRoute.TaskList
             settingsTask = null
@@ -1447,7 +1356,6 @@ class TaskControlPanelGlobalOverlay(
                 pending = true,
                 reason = "close_settings_panel_animation_done",
             )
-            touchUi()
             afterClosed?.invoke()
         }
     }
@@ -1468,32 +1376,12 @@ class TaskControlPanelGlobalOverlay(
         if (!settingsVisible) {
             return
         }
-        when (settingsRoute) {
-            SettingsRoute.TaskList -> closeSettingsPanel()
-            SettingsRoute.ActionList -> {
-                settingsRoute = SettingsRoute.TaskList
-                touchUi()
-            }
-
-            SettingsRoute.RunHistory -> {
-                settingsRoute = SettingsRoute.TaskList
-                touchUi()
-            }
-
-            SettingsRoute.ReportHistory -> {
-                settingsRoute = SettingsRoute.TaskList
-                touchUi()
-            }
-
-            is SettingsRoute.ReportHistoryDetail -> {
-                settingsRoute = SettingsRoute.ReportHistory
-                touchUi()
-            }
-
-            is SettingsRoute.NodeEditor -> {
-                settingsRoute = SettingsRoute.ActionList
-                touchUi()
-            }
+        val nextRoute = settingsRouteOnBackdropTap(settingsRoute)
+        if (nextRoute == null) {
+            closeSettingsPanel()
+        } else {
+            settingsRoute = nextRoute
+            touchUi()
         }
     }
 
@@ -2004,15 +1892,19 @@ class TaskControlPanelGlobalOverlay(
     private fun SettingsOverlayContent() {
         val activeSettingsModal = settingsModal
         val settingsModalVisible = activeSettingsModal != null
-        val settingsModalModel = buildSettingsModalModel(activeSettingsModal)
-        if (
-            !settingsVisible &&
-            !recordingSaveDialogVisible &&
-            !recordingSaveDialogAnimatingOut &&
-            !settingsModalVisible &&
-            !clickPickerVisible &&
-            !pendingSettingsOverlayRemoval
-        ) {
+        val settingsModalModel = buildSettingsModalModel(
+            modal = activeSettingsModal,
+            runtimeReportHistory = runtimeReportHistory,
+        )
+        val lifecycleState = SettingsOverlayLifecycleState(
+            settingsVisible = settingsVisible,
+            recordingDialogVisible = recordingSaveDialogVisible,
+            recordingDialogAnimatingOut = recordingSaveDialogAnimatingOut,
+            hasModal = settingsModalVisible,
+            clickPickerVisible = clickPickerVisible,
+            pendingRemoval = pendingSettingsOverlayRemoval,
+        )
+        if (!shouldRenderSettingsOverlay(lifecycleState)) {
             return
         }
         val dialogOpenToken = recordingSaveDialogOpenToken
@@ -2533,20 +2425,12 @@ class TaskControlPanelGlobalOverlay(
         val isReportHistoryList = route == SettingsRoute.ReportHistory
         val isReportHistoryDetail = route is SettingsRoute.ReportHistoryDetail
         SharedOverlayDialogScaffold(
-            title = when {
-                isRunHistory -> "本次执行历史"
-                isReportHistoryList -> "历史记录"
-                isReportHistoryDetail -> "历史记录详情"
-                else -> "动作列表"
-            },
+            title = settingsRouteActionLayerTitle(route),
             showBack = true,
             showMinimize = true,
             modifier = modifier,
             onBack = {
-                settingsRoute = when (route) {
-                    is SettingsRoute.ReportHistoryDetail -> SettingsRoute.ReportHistory
-                    else -> SettingsRoute.TaskList
-                }
+                settingsRoute = settingsRouteOnActionLayerBack(route)
                 touchUi()
             },
             onClose = {},
@@ -2682,15 +2566,14 @@ class TaskControlPanelGlobalOverlay(
 
     @Composable
     private fun SettingsReportHistoryPage() {
-        val taskScopeLabel = if (runtimeReportHistoryTaskId.isNullOrBlank()) {
-            null
-        } else {
-            "仅显示任务：${runtimeReportHistoryTaskName.ifBlank { runtimeReportHistoryTaskId.orEmpty() }}"
-        }
+        val taskScopeLabel = buildRuntimeReportTaskScopeLabel(
+            taskId = runtimeReportHistoryTaskId,
+            taskName = runtimeReportHistoryTaskName,
+        )
         TaskControlRuntimeReportHistoryPage(
             history = runtimeReportHistory,
             taskScopeLabel = taskScopeLabel,
-            isTaskScoped = !runtimeReportHistoryTaskId.isNullOrBlank(),
+            isTaskScoped = isRuntimeReportTaskScoped(runtimeReportHistoryTaskId),
             statusMessage = runtimeReportHistoryMessage,
             onRefresh = {
                 refreshRuntimeReportHistory(message = "已刷新", withCount = true)
@@ -2703,96 +2586,22 @@ class TaskControlPanelGlobalOverlay(
 
     @Composable
     private fun SettingsReportHistoryDetailPage() {
-        val currentReportId = runtimeReportDetail?.reportId
-            ?: (settingsRoute as? SettingsRoute.ReportHistoryDetail)?.reportId
-        val currentIndex = runtimeReportHistory.indexOfFirst { it.reportId == currentReportId }
-        val canOpenPrev = currentIndex > 0
-        val canOpenNext = currentIndex in 0 until runtimeReportHistory.lastIndex
+        val currentReportId = resolveCurrentRuntimeReportId(
+            detail = runtimeReportDetail,
+            route = settingsRoute,
+        )
+        val paging = computeRuntimeReportDetailPaging(
+            history = runtimeReportHistory,
+            currentReportId = currentReportId,
+        )
         TaskControlRuntimeReportDetailPage(
             detail = runtimeReportDetail,
             statusMessage = runtimeReportDetailMessage,
-            canOpenPrev = canOpenPrev,
-            canOpenNext = canOpenNext,
+            canOpenPrev = paging.canOpenPrev,
+            canOpenNext = paging.canOpenNext,
             onOpenPrev = ::openPrevRuntimeReportDetail,
             onOpenNext = ::openNextRuntimeReportDetail,
         )
-    }
-
-    private fun buildSettingsModalModel(
-        modal: SettingsModal?,
-    ): TaskControlModalModel? {
-        return when (modal) {
-            null -> null
-            is SettingsModal.ConfirmStartTask -> {
-                TaskControlModalModel(
-                    title = "确认开始任务",
-                    message = "是否开始执行任务：${modal.taskName.ifBlank { "未命名任务" }}",
-                    tone = TaskControlModalTone.DEFAULT,
-                    dismissOnBackdropTap = true,
-                    actions = listOf(
-                        TaskControlModalAction(
-                            key = MODAL_ACTION_CANCEL,
-                            text = "取消",
-                        ),
-                        TaskControlModalAction(
-                            key = MODAL_ACTION_CONFIRM,
-                            text = "开始",
-                        ),
-                    ),
-                )
-            }
-
-            is SettingsModal.ConfirmDeleteRuntimeReport -> {
-                val pendingItem = runtimeReportHistory.firstOrNull { it.reportId == modal.reportId }
-                    ?: return null
-                TaskControlModalModel(
-                    title = "删除历史记录",
-                    message = "确认删除这条历史记录吗？\n${pendingItem.reportId}",
-                    tone = TaskControlModalTone.WARNING,
-                    dismissOnBackdropTap = true,
-                    actions = listOf(
-                        TaskControlModalAction(
-                            key = MODAL_ACTION_CANCEL,
-                            text = "取消",
-                        ),
-                        TaskControlModalAction(
-                            key = MODAL_ACTION_CONFIRM,
-                            text = "确认删除",
-                        ),
-                    ),
-                )
-            }
-
-            is SettingsModal.Success -> {
-                TaskControlModalModel(
-                    title = modal.title,
-                    message = modal.message,
-                    tone = TaskControlModalTone.SUCCESS,
-                    dismissOnBackdropTap = true,
-                    actions = listOf(
-                        TaskControlModalAction(
-                            key = MODAL_ACTION_CONFIRM,
-                            text = "知道了",
-                        ),
-                    ),
-                )
-            }
-
-            is SettingsModal.Failure -> {
-                TaskControlModalModel(
-                    title = modal.title,
-                    message = modal.message,
-                    tone = TaskControlModalTone.FAILURE,
-                    dismissOnBackdropTap = true,
-                    actions = listOf(
-                        TaskControlModalAction(
-                            key = MODAL_ACTION_CONFIRM,
-                            text = "知道了",
-                        ),
-                    ),
-                )
-            }
-        }
     }
 
     private fun currentScreenSizePx(): Pair<Int, Int> {
@@ -2915,37 +2724,18 @@ class TaskControlPanelGlobalOverlay(
     }
 
     private fun beginCurrentRunSession(task: TaskRecord) {
-        currentRunTraceId = ""
-        currentRunTaskId = task.taskId
-        currentRunTaskName = task.name
-        currentRunStatus = "RUNNING"
-        currentRunStepCount = 0
-        currentRunStartedAtEpochMs = System.currentTimeMillis()
-        currentRunFinishedAtEpochMs = 0L
-        currentRunMessage = "running"
-        currentRunErrorCode = ""
-        currentRunEvents = emptyList()
+        currentRunSessionState = currentRunSessionState.begin(
+            taskId = task.taskId,
+            taskName = task.name,
+        )
     }
 
     private fun resetCurrentRunSession() {
-        currentRunTraceId = ""
-        currentRunTaskId = ""
-        currentRunTaskName = ""
-        currentRunStatus = ""
-        currentRunStepCount = 0
-        currentRunStartedAtEpochMs = 0L
-        currentRunFinishedAtEpochMs = 0L
-        currentRunMessage = ""
-        currentRunErrorCode = ""
-        currentRunEvents = emptyList()
+        currentRunSessionState = currentRunSessionState.reset()
     }
 
     private fun updateCurrentRunSessionFromTrace(event: RuntimeTraceEvent) {
-        if (currentRunTraceId.isBlank()) {
-            currentRunTraceId = event.traceId
-        }
-        currentRunStepCount = maxOf(currentRunStepCount, event.step + 1)
-        currentRunEvents = (currentRunEvents + event).takeLast(600)
+        currentRunSessionState = currentRunSessionState.updateFromTrace(event)
     }
 
     private fun finalizeCurrentRunSession(
@@ -2955,39 +2745,19 @@ class TaskControlPanelGlobalOverlay(
         stepCount: Int,
         finishedAtEpochMs: Long = System.currentTimeMillis(),
     ) {
-        currentRunStatus = status
-        currentRunMessage = message
-        currentRunErrorCode = errorCode
-        currentRunStepCount = maxOf(currentRunStepCount, stepCount)
-        currentRunFinishedAtEpochMs = finishedAtEpochMs.coerceAtLeast(currentRunStartedAtEpochMs)
+        currentRunSessionState = currentRunSessionState.finalize(
+            status = status,
+            message = message,
+            errorCode = errorCode,
+            stepCount = stepCount,
+            finishedAtEpochMs = finishedAtEpochMs,
+        )
     }
 
     private fun currentRunHistorySnapshot(): TaskControlRunHistorySnapshot? {
-        if (!hasCurrentRunSession()) {
-            return null
-        }
-        val taskName = currentRunTaskName.ifBlank { runningPanelState.taskName }
-        val status = currentRunStatus.ifBlank {
-            if (running) "RUNNING" else "-"
-        }
-        val message = currentRunMessage.ifBlank {
-            runningPanelState.lastMessage
-        }
-        val errorCode = currentRunErrorCode.ifBlank {
-            runningPanelState.lastErrorCode
-        }
-        val stepCount = maxOf(currentRunStepCount, runningPanelState.stepCount)
-        return TaskControlRunHistorySnapshot(
-            traceId = currentRunTraceId,
-            taskId = currentRunTaskId,
-            taskName = taskName,
-            status = status,
-            stepCount = stepCount,
-            startedAtEpochMs = currentRunStartedAtEpochMs,
-            finishedAtEpochMs = currentRunFinishedAtEpochMs.takeIf { it > 0L },
-            message = message,
-            errorCode = errorCode,
-            events = currentRunEvents,
+        return currentRunSessionState.toHistorySnapshot(
+            runningPanelState = runningPanelState,
+            running = running,
         )
     }
 
@@ -2998,9 +2768,7 @@ class TaskControlPanelGlobalOverlay(
 
     private fun updateRunningPanelFromResult(result: RuntimeExecutionResult) {
         runningPanelState = runningPanelState.applyResult(result)
-        if (currentRunTraceId.isBlank()) {
-            currentRunTraceId = result.traceId
-        }
+        currentRunSessionState = currentRunSessionState.withTraceIdIfBlank(result.traceId)
         finalizeCurrentRunSession(
             status = result.status.name,
             message = result.message ?: runningPanelState.lastMessage,
@@ -3016,7 +2784,9 @@ class TaskControlPanelGlobalOverlay(
         runningPanelState = runningPanelState.togglePause()
         val paused = runningPanelState.paused
         runningPauseRequested = paused
-        currentRunMessage = if (paused) "paused_by_user" else "resumed_by_user"
+        currentRunSessionState = currentRunSessionState.withMessage(
+            if (paused) "paused_by_user" else "resumed_by_user",
+        )
         appendCurrentRunControlEvent(
             message = if (paused) "paused_by_user" else "resumed_by_user",
             details = mapOf(
@@ -3039,8 +2809,9 @@ class TaskControlPanelGlobalOverlay(
         if (!hasCurrentRunSession()) {
             return
         }
+        val session = currentRunSessionState
         val controlEvent = RuntimeTraceEvent(
-            traceId = currentRunTraceId.ifBlank { "overlay_control" },
+            traceId = session.traceId.ifBlank { "overlay_control" },
             step = runningPanelState.stepCount,
             flowId = runningPanelState.currentFlowId.ifBlank { "-" },
             nodeId = "__panel_control__",
@@ -3049,7 +2820,7 @@ class TaskControlPanelGlobalOverlay(
             message = message,
             details = details + ("uiEvent" to "panel_control"),
         )
-        currentRunEvents = (currentRunEvents + controlEvent).takeLast(600)
+        currentRunSessionState = session.appendControlEvent(controlEvent)
     }
 
     private fun startLastTask(preferredTaskId: String? = null) {

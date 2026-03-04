@@ -582,12 +582,42 @@
 513. 运行态状态拆分（阶段二-继续）：新增 `TaskControlPanelRunningState`（`start/reset/applyTrace/applyResult/togglePause`），将 `RUNNING` 面板核心字段从 `TaskControlPanelGlobalOverlay` 分散状态收敛为单一状态对象。
 514. 运行态状态单测补齐：新增 `TaskControlPanelRunningStateTest`，覆盖初始化、trace 更新、暂停切换、结果落盘映射，降低后续运行态 UI 调整回归风险。
 515. 稳定性验证：以上“移除历史分享 + 运行态状态收敛”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+516. 本次执行会话状态收敛（阶段二-继续）：新增 `TaskControlPanelCurrentRunSessionState`，统一管理 `traceId/task/status/step/time/message/errorCode/events`，封装 `begin/reset/updateFromTrace/appendControlEvent/finalize` 等状态变换。
+517. Overlay 接线改造：`TaskControlPanelGlobalOverlay` 移除分散 `currentRun*` 字段，改为单一 `currentRunSessionState` 驱动“本次执行历史”入口可见性、运行快照组装、暂停/继续控制事件写入与结果收口。
+518. 会话状态单测补齐：新增 `TaskControlPanelCurrentRunSessionStateTest`，覆盖初始化、trace 更新、完成态收口（step/time 钳制）与 reset 清空，降低后续运行会话重构回归风险。
+519. 稳定性验证：以上“CurrentRunSessionState 接入 + 单测补齐”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+520. 历史快照组装下沉：`CurrentRunSessionState` 新增 `toHistorySnapshot(runningPanelState, running)`，由状态对象统一处理 fallback 字段（task/status/message/error/step）与快照输出。
+521. Overlay 进一步瘦身：`TaskControlPanelGlobalOverlay.currentRunHistorySnapshot()` 改为直接委托 `currentRunSessionState.toHistorySnapshot(...)`，减少重复字段拼装分支。
+522. 单测扩展：`TaskControlPanelCurrentRunSessionStateTest` 新增“无会话返回 null”和“fallback 字段生效”覆盖；并再次通过 `testDebugUnitTest` 与 `assembleDebug`。
+523. 设置路由规则抽离：新增 `TaskControlPanelSettingsNavigation.kt`，将 `SettingsRoute` 及“标题文案/返回规则/遮罩返回规则”提取为独立可复用函数，减少 Overlay 内部分支耦合。
+524. 设置层开屏逻辑收敛：`TaskControlPanelGlobalOverlay` 新增 `showSettingsOverlayRoute(route, reason)`，统一 `openSettingsPanel/openRunHistoryOverlay/openReportHistoryOverlay` 的重复显示与动画初始化流程。
+525. 路由回退接线统一：`SettingsActionListLayer.onBack` 与 `onAuxOverlayBackdropTap` 改为委托导航规则函数，移除散落在页面层的手写 `when` 回退分支。
+526. 导航规则单测补齐：新增 `TaskControlPanelSettingsNavigationTest`，覆盖标题映射、子页返回与遮罩点击回退行为，确保后续路由调整可回归验证。
+527. 稳定性验证：以上“设置路由规则抽离 + 开屏逻辑收敛”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+528. 设置模态规则抽离：新增 `TaskControlPanelSettingsModal.kt`，将 `SettingsModal` 与 `resolveSettingsModalAction()`（关闭/开始任务/删除历史）提为纯决策层，剥离 Overlay 内部动作分支。
+529. 模态动作调度收敛：`TaskControlPanelGlobalOverlay.onSettingsModalAction` 改为“解析动作 -> 统一 dismiss -> 延迟执行副作用（start/delete）”，减少重复 `when` 分支与重复 `dismiss` 调用。
+530. 模态规则单测补齐：新增 `TaskControlPanelSettingsModalTest`，覆盖确认开始、确认删除、反馈类弹窗默认关闭与非法 action key 的回退行为。
+531. 稳定性验证：以上“SettingsModal 决策层抽离 + Overlay 动作收敛”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+532. 设置页数据装配抽离：新增 `TaskControlPanelReportHistoryPresentation.kt`，沉淀历史页作用域文案、详情当前 report 解析、详情翻页状态与相邻记录定位等纯函数，减少 Overlay 内重复计算。
+533. 历史详情导航接线收敛：`SettingsReportHistoryDetailPage` 与 `openAdjacentRuntimeReportDetail` 改为复用 presentation 纯函数，统一“当前项解析 + 可前后翻页”行为。
+534. 模态 UI 模型映射下沉：`buildSettingsModalModel(...)` 从 `TaskControlPanelGlobalOverlay` 下沉到 `TaskControlPanelSettingsModal.kt`，由 modal 模块统一管理确认/反馈弹窗文案与动作模型。
+535. 设置页列表参数收敛：`SettingsReportHistoryPage` 的 `taskScopeLabel/isTaskScoped` 改为调用 presentation 纯函数，避免页面组合层内拼装文案。
+536. 单测扩展：新增 `TaskControlPanelReportHistoryPresentationTest`，并扩展 `TaskControlPanelSettingsModalTest` 覆盖 modal UI 模型映射，补齐“详情翻页/作用域文案/modal 映射”回归保障。
+537. 稳定性验证：以上“设置页数据装配抽离 + modal model 下沉”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+538. 设置层生命周期判定抽离：新增 `TaskControlPanelSettingsOverlayLifecycle.kt`，封装“是否渲染设置 overlay / 是否可空闲移除 / 阻塞签名”纯函数与状态模型，减少生命周期判断散落。
+539. 生命周期接线收敛：`SettingsOverlayContent` 的 early-return 与 `removeSettingsOverlayIfIdle` 的阻塞判定统一改为复用生命周期纯函数，保持判定口径一致并保留原日志行为。
+540. 生命周期单测补齐：新增 `TaskControlPanelSettingsOverlayLifecycleTest`，覆盖渲染条件、空闲移除条件与阻塞签名格式，防止后续隐藏/移除逻辑回归。
+541. 稳定性验证：以上“生命周期判定抽离 + 接线收敛”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+542. 生命周期副作用调度收敛：`TaskControlPanelGlobalOverlay` 新增 `startSettingsSheetEnterAnimation()` 与 `animateSettingsOverlayDismiss(reason, afterDismiss)`，统一管理设置层进入与关闭动画的延迟调度。
+543. 关闭/最小化链路复用：`closeSettingsPanel()` 与 `minimizeSettingsOverlay()` 改为共用 dismiss 动画 helper，减少重复状态写入并统一“动画完成后再执行副作用”时序。
+544. 恢复链路复用：`showSettingsOverlayRoute()` 与 `restoreSettingsOverlayFromMini()` 的 sheet 进入延迟统一改为 `startSettingsSheetEnterAnimation()`，降低不同入口动画时序漂移风险。
+545. 稳定性验证：以上“生命周期副作用调度收敛”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
 
 ## 3. 正在进行
 
 1. 全局操作面板实机交互打磨（录制态按钮间距/状态文案/误触控制、运行态信息密度与按钮排布、录制提示层反馈）。
 2. 调试面板前置能力推进：已打通“任务菜单历史记录入口 + 删除能力”，下一步继续补齐筛选、搜索与分页体验。
-3. 继续推进页面状态层拆分第二阶段：把 `TaskControlPanelGlobalOverlay` 的编辑/运行状态进一步拆成可复用状态模型与控制器，降低超长文件维护成本（已先完成图形预览子模块抽离）。
+3. 继续推进页面状态层拆分第二阶段：运行态、本次执行会话态、设置路由、设置模态决策、设置页数据装配与生命周期判定/调度已完成首轮收敛，下一步继续抽离 overlay 生命周期编排为可测试事件状态机。
 4. 编辑页组件化：`TaskList/ActionList/NodeEditor`、状态容器、规则逻辑与单测已完成；当前进入实机联调与体验回归阶段。
 5. 录制多指会话实机打磨（手指数上限、停顿阈值、不同机型采样密度）。
 6. 首页任务入口已收敛为单按钮，后续观察是否需要在首页增加“最近任务摘要”只读信息（不引入第二条编辑路径）。

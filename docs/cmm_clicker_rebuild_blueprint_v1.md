@@ -395,6 +395,8 @@ interface ActionPlugin {
    - 浮窗设置路由新增 `RunHistory`，支持从任务设置页进入“本次执行历史”
    - 页面展示执行摘要（traceId/status/step/时间）与逐步事件列表（phase、flow/node、message、details）
    - 运行会话引入内存态缓存，确保执行结束后仍可在当前浮窗会话内查看本次完整轨迹
+   - 会话缓存模型收敛为 `CurrentRunSessionState`（`begin/reset/updateFromTrace/appendControlEvent/finalize`），减少 overlay 内分散字段并提升可测试性
+   - 历史页快照组装改为 `CurrentRunSessionState.toHistorySnapshot(...)` 统一输出，Overlay 仅保留路由与渲染调度职责
 25. 调试历史入口统一（阶段二-任务菜单化）：
    - 浮窗设置路由新增 `ReportHistory`，在“任务设置”菜单增加常驻【历史记录】入口，统一承接历史查看
    - 历史记录页展示 `RuntimeRunReportRepository` 的摘要列表，支持详情查看与删除
@@ -445,3 +447,24 @@ interface ActionPlugin {
 34. 弹窗导航布局规范（阶段二-单手操作）：
    - `SharedOverlayDialogScaffold` 的导航动作下沉到底部左侧（根页=关闭，子页=返回），顶部保留标题与可选最小化按钮
    - 子页不再提供关闭动作，必须先回退到根页再关闭，降低误关闭概率并统一层级语义
+35. 设置路由决策下沉（阶段二-状态拆分）：
+   - 新增 `TaskControlPanelSettingsNavigation.kt`，承载 `SettingsRoute` 及“标题映射/返回路径/遮罩返回路径”纯函数，避免路由规则散落在多个 Composable 与事件入口
+   - `TaskControlPanelGlobalOverlay` 新增 `showSettingsOverlayRoute(route, reason)` 统一设置层展示初始化（可见性、动画、隐藏原因、overlay 挂载）
+   - `SettingsActionListLayer` 与 `onAuxOverlayBackdropTap` 改为委托导航函数，Overlay 从“路由规则实现者”收敛为“路由状态调度者”
+36. 设置模态决策下沉（阶段二-状态拆分）：
+   - 新增 `TaskControlPanelSettingsModal.kt`，承载 `SettingsModal` 模型与 `resolveSettingsModalAction()` 纯决策函数（`Dismiss/StartTask/DeleteRuntimeReport`）
+   - `TaskControlPanelGlobalOverlay.onSettingsModalAction` 改为统一“动作解析 + modal 关闭 + 延迟副作用调度”流程，减少重复分支并保持动效先于业务执行
+   - `buildSettingsModalModel(...)` 同步下沉至 modal 模块，统一确认/反馈弹窗的 UI 模型映射逻辑
+   - 对应单测 `TaskControlPanelSettingsModalTest` 覆盖“确认开始/确认删除/反馈弹窗默认关闭/未知动作忽略”，保障后续 modal 增量扩展
+37. 设置页数据装配下沉（阶段二-状态拆分）：
+   - 新增 `TaskControlPanelReportHistoryPresentation.kt`，承载历史页作用域标签、详情当前项解析、翻页状态与相邻记录定位纯函数
+   - `SettingsReportHistoryPage/SettingsReportHistoryDetailPage` 与详情前后翻页逻辑统一委托 presentation 层，Overlay 不再内联拼装展示数据
+   - 对应单测 `TaskControlPanelReportHistoryPresentationTest` 覆盖作用域文案、当前项解析与翻页边界，降低历史页后续迭代回归风险
+38. 设置 overlay 生命周期判定下沉（阶段二-状态拆分）：
+   - 新增 `TaskControlPanelSettingsOverlayLifecycle.kt`，统一“设置 overlay 是否需要渲染、是否可空闲移除、阻塞签名”的判定函数
+   - `SettingsOverlayContent` 与 `removeSettingsOverlayIfIdle` 共享同一判定口径，避免隐藏/移除条件在不同函数中漂移
+   - 对应单测 `TaskControlPanelSettingsOverlayLifecycleTest` 覆盖渲染条件、可移除条件与阻塞签名输出
+39. 设置 overlay 生命周期调度收敛（阶段二-状态拆分）：
+   - `TaskControlPanelGlobalOverlay` 新增 `startSettingsSheetEnterAnimation()` 与 `animateSettingsOverlayDismiss(...)`，统一设置层进入/关闭动画调度
+   - `closeSettingsPanel`、`minimizeSettingsOverlay`、`restoreSettingsOverlayFromMini` 与 `showSettingsOverlayRoute` 复用上述调度函数，减少重复延迟逻辑和状态重置分支
+   - 保持“动画完成后再执行副作用”的时序约束，降低不同关闭入口造成的状态漂移

@@ -547,6 +547,10 @@
 478. 最小化恢复路由修复：修正“编辑动作页最小化后恢复回到任务设置根页”问题；最小化不再触发 settings overlay 移除重置，而是切换为 `FLAG_NOT_TOUCHABLE + INVISIBLE` 保持当前路由与编辑上下文。
 479. 设置层交互开关：新增 `settingsLayoutParams` 与 `setSettingsOverlayInteractionEnabled()`，在最小化/恢复与重开设置时显式切换可触摸状态，避免全屏空 overlay 残留拦截触摸。
 480. 稳定性验证：以上“最小化恢复路由修复”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+481. 面板可见性追踪增强：新增结构化 trace 记录（`panelVisibilityTrace`，限制最近 180 条），统一输出 `event/reason/panelMode/panelDisplayMode/hideReasons/settingsVisible/overlayAttached`，便于复盘隐藏与移除链路。
+482. 原因链路日志收敛：`setPanelDisplayMode`、`setPanelHideReason`、`setPendingSettingsOverlayRemoval`、`removeSettingsOverlay`、`removeOverlay`、`settings modal show/dismiss/action`、`settings open/close/minimize/restore` 全部接入 `panel_trace` 日志。
+483. 移除阻塞可见化：`removeSettingsOverlayIfIdle` 增加阻塞签名日志（并去重），可直接看到为何未满足移除条件（如 `settingsVisible` / `recordingDialog` / `settingsModal`）。
+484. 稳定性验证：以上“隐藏/移除原因可回溯”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
 
 ## 3. 正在进行
 

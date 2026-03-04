@@ -182,6 +182,7 @@ class TaskControlPanelGlobalOverlay(
         private const val MODAL_ACTION_CANCEL = "cancel"
         private const val MODAL_ACTION_CONFIRM = "confirm"
         private const val MODAL_EXIT_DELAY_MS = 130L
+        private const val PANEL_VISIBILITY_TRACE_LIMIT = 180
     }
 
     private data class RecordedStroke(
@@ -224,6 +225,19 @@ class TaskControlPanelGlobalOverlay(
         RECORDING_INTERACTION,
         RUNNING_TEMP,
     }
+
+    private data class PanelVisibilityTraceEntry(
+        val timestampMs: Long,
+        val event: String,
+        val reason: String,
+        val panelMode: PanelMode,
+        val panelDisplayMode: PanelDisplayMode,
+        val hideReasons: String,
+        val settingsVisible: Boolean,
+        val settingsSheetVisible: Boolean,
+        val overlayAttached: Boolean,
+        val settingsOverlayAttached: Boolean,
+    )
 
     private sealed interface SettingsRoute {
         data object TaskList : SettingsRoute
@@ -346,7 +360,9 @@ class TaskControlPanelGlobalOverlay(
     private var recordingSaveDialogAnimatingOut by mutableStateOf(false)
     private var removeSettingsOverlayAfterRecordingDialogExit = false
     private var pendingSettingsOverlayRemoval = false
+    private var settingsOverlayIdleBlockSignature by mutableStateOf("")
     private var settingsOverlayInteractionEnabled = true
+    private var panelVisibilityTrace by mutableStateOf<List<PanelVisibilityTraceEntry>>(emptyList())
     private var clickPickerVisible by mutableStateOf(false)
     private var clickPickerNodeId by mutableStateOf<String?>(null)
     private var clickPickerX by mutableStateOf(0f)
@@ -399,16 +415,22 @@ class TaskControlPanelGlobalOverlay(
         recordingSaveDialogOpenToken = 0
         recordingSaveDialogAnimatingOut = false
         removeSettingsOverlayAfterRecordingDialogExit = false
-        pendingSettingsOverlayRemoval = false
+        setPendingSettingsOverlayRemoval(
+            pending = false,
+            reason = "initialize_panel_state",
+        )
         clickPickerVisible = false
         clickPickerNodeId = null
         clickPickerX = 0f
         clickPickerY = 0f
         panelMode = PanelMode.NORMAL
-        panelDisplayMode = PanelDisplayMode.FULL
-        panelHideReasons.clear()
+        setPanelDisplayMode(
+            mode = PanelDisplayMode.FULL,
+            reason = "initialize_panel_state",
+        )
+        clearPanelHideReasons(reason = "initialize_panel_state")
         if (openSettings) {
-            panelHideReasons[PanelHideReason.SETTINGS_OPEN] = true
+            setPanelHideReason(PanelHideReason.SETTINGS_OPEN, hidden = true)
         }
         resetRunningPanelState()
         resetCurrentRunSession()
@@ -439,18 +461,98 @@ class TaskControlPanelGlobalOverlay(
             settingsSheetVisible = true
             touchUi()
         }
+        recordPanelVisibilityEvent(
+            event = "initialize.complete",
+            reason = "openSettings=$openSettings preferredTaskId=${preferredTaskId ?: "-"}",
+        )
     }
 
-    fun hide() {
+    fun hide(reason: String = "external_request") {
+        recordPanelVisibilityEvent(
+            event = "hide.request",
+            reason = reason,
+        )
         themeSyncJob?.cancel()
         themeSyncJob = null
         stopRecordingTicker(resetElapsed = true)
         stopCaptureOverlay()
-        removeSettingsOverlay()
-        removeOverlay()
+        removeSettingsOverlay(reason = "hide:$reason")
+        removeOverlay(reason = "hide:$reason")
     }
 
     fun isShowing(): Boolean = overlayView != null
+
+    private fun hideReasonsLabel(): String {
+        return panelHideReasons.keys
+            .sortedBy { it.name }
+            .joinToString(separator = ",") { it.name }
+            .ifBlank { "-" }
+    }
+
+    private fun recordPanelVisibilityEvent(
+        event: String,
+        reason: String,
+    ) {
+        val entry = PanelVisibilityTraceEntry(
+            timestampMs = System.currentTimeMillis(),
+            event = event,
+            reason = reason,
+            panelMode = panelMode,
+            panelDisplayMode = panelDisplayMode,
+            hideReasons = hideReasonsLabel(),
+            settingsVisible = settingsVisible,
+            settingsSheetVisible = settingsSheetVisible,
+            overlayAttached = overlayView != null,
+            settingsOverlayAttached = settingsOverlayView != null,
+        )
+        panelVisibilityTrace = (panelVisibilityTrace + entry).takeLast(PANEL_VISIBILITY_TRACE_LIMIT)
+        Log.d(
+            TAG,
+            "panel_trace event=${entry.event} reason=${entry.reason} " +
+                "mode=${entry.panelMode} display=${entry.panelDisplayMode} " +
+                "hide=${entry.hideReasons} settings=$settingsVisible/$settingsSheetVisible " +
+                "overlay=${entry.overlayAttached} settingsOverlay=${entry.settingsOverlayAttached}",
+        )
+    }
+
+    private fun setPanelDisplayMode(
+        mode: PanelDisplayMode,
+        reason: String,
+    ) {
+        if (panelDisplayMode == mode) {
+            return
+        }
+        panelDisplayMode = mode
+        recordPanelVisibilityEvent(
+            event = "panel_display_mode",
+            reason = "$reason -> ${mode.name}",
+        )
+    }
+
+    private fun setPendingSettingsOverlayRemoval(
+        pending: Boolean,
+        reason: String,
+    ) {
+        if (pendingSettingsOverlayRemoval == pending) {
+            return
+        }
+        pendingSettingsOverlayRemoval = pending
+        recordPanelVisibilityEvent(
+            event = "settings_overlay_pending_remove",
+            reason = "$reason -> $pending",
+        )
+    }
+
+    private fun clearPanelHideReasons(reason: String) {
+        if (panelHideReasons.isEmpty()) {
+            return
+        }
+        panelHideReasons.clear()
+        recordPanelVisibilityEvent(
+            event = "panel_hide_reason_clear",
+            reason = reason,
+        )
+    }
 
     private fun setPanelHideReason(reason: PanelHideReason, hidden: Boolean) {
         val previous = panelHideReasons[reason] == true
@@ -462,6 +564,10 @@ class TaskControlPanelGlobalOverlay(
         } else {
             panelHideReasons.remove(reason)
         }
+        recordPanelVisibilityEvent(
+            event = "panel_hide_reason",
+            reason = "${reason.name} -> $hidden",
+        )
         touchUi()
     }
 
@@ -485,13 +591,20 @@ class TaskControlPanelGlobalOverlay(
                 .onFailure { Log.w(TAG, "setSettingsOverlayInteractionEnabled failed: enabled=$enabled", it) }
         }
         view.visibility = if (enabled) View.VISIBLE else View.INVISIBLE
+        recordPanelVisibilityEvent(
+            event = "settings_overlay_interaction",
+            reason = "enabled=$enabled",
+        )
     }
 
     private fun minimizeSettingsOverlay() {
         if (!settingsVisible || settingsDismissAnimating) {
             return
         }
-        panelDisplayMode = PanelDisplayMode.MINI
+        setPanelDisplayMode(
+            mode = PanelDisplayMode.MINI,
+            reason = "minimize_settings_overlay",
+        )
         settingsDismissAnimating = true
         settingsSheetVisible = false
         touchUi()
@@ -501,7 +614,10 @@ class TaskControlPanelGlobalOverlay(
             settingsSheetVisible = false
             settingsDismissAnimating = false
             setPanelHideReason(PanelHideReason.SETTINGS_OPEN, hidden = false)
-            pendingSettingsOverlayRemoval = false
+            setPendingSettingsOverlayRemoval(
+                pending = false,
+                reason = "minimize_settings_overlay_complete",
+            )
             setSettingsOverlayInteractionEnabled(enabled = false)
             touchUi()
         }
@@ -511,7 +627,10 @@ class TaskControlPanelGlobalOverlay(
         if (panelDisplayMode != PanelDisplayMode.MINI) {
             return
         }
-        panelDisplayMode = PanelDisplayMode.FULL
+        setPanelDisplayMode(
+            mode = PanelDisplayMode.FULL,
+            reason = "restore_settings_overlay",
+        )
         if (settingsVisible) {
             setSettingsOverlayInteractionEnabled(enabled = true)
             touchUi()
@@ -519,7 +638,10 @@ class TaskControlPanelGlobalOverlay(
         }
         ensureSettingsOverlayView()
         setSettingsOverlayInteractionEnabled(enabled = true)
-        pendingSettingsOverlayRemoval = false
+        setPendingSettingsOverlayRemoval(
+            pending = false,
+            reason = "restore_settings_overlay_prepare",
+        )
         settingsVisible = true
         settingsDismissAnimating = false
         settingsSheetVisible = false
@@ -660,7 +782,11 @@ class TaskControlPanelGlobalOverlay(
         }
     }
 
-    private fun removeSettingsOverlay() {
+    private fun removeSettingsOverlay(reason: String = "unspecified") {
+        recordPanelVisibilityEvent(
+            event = "settings_overlay.remove",
+            reason = reason,
+        )
         val view = settingsOverlayView
         if (view != null) {
             runCatching { windowManager.removeView(view) }
@@ -684,16 +810,24 @@ class TaskControlPanelGlobalOverlay(
         recordingSaveDialogOpenToken = 0
         recordingSaveDialogAnimatingOut = false
         removeSettingsOverlayAfterRecordingDialogExit = false
-        pendingSettingsOverlayRemoval = false
+        setPendingSettingsOverlayRemoval(
+            pending = false,
+            reason = "remove_settings_overlay",
+        )
         clickPickerVisible = false
         clickPickerNodeId = null
         clickPickerX = 0f
         clickPickerY = 0f
+        settingsOverlayIdleBlockSignature = ""
         settingsOverlayInteractionEnabled = true
-        panelHideReasons.remove(PanelHideReason.SETTINGS_OPEN)
+        setPanelHideReason(PanelHideReason.SETTINGS_OPEN, hidden = false)
     }
 
-    private fun removeOverlay() {
+    private fun removeOverlay(reason: String = "unspecified") {
+        recordPanelVisibilityEvent(
+            event = "panel_overlay.remove",
+            reason = reason,
+        )
         val view = overlayView
         if (view != null) {
             runCatching { windowManager.removeView(view) }
@@ -724,7 +858,10 @@ class TaskControlPanelGlobalOverlay(
         recordingSaveDialogOpenToken = 0
         recordingSaveDialogAnimatingOut = false
         removeSettingsOverlayAfterRecordingDialogExit = false
-        pendingSettingsOverlayRemoval = false
+        setPendingSettingsOverlayRemoval(
+            pending = false,
+            reason = "remove_overlay",
+        )
         clickPickerVisible = false
         clickPickerNodeId = null
         clickPickerX = 0f
@@ -732,8 +869,11 @@ class TaskControlPanelGlobalOverlay(
         recordedGestures.clear()
         recordedStepCount = 0
         stopRecordingTicker(resetElapsed = true)
-        panelDisplayMode = PanelDisplayMode.FULL
-        panelHideReasons.clear()
+        setPanelDisplayMode(
+            mode = PanelDisplayMode.FULL,
+            reason = "remove_overlay",
+        )
+        clearPanelHideReasons(reason = "remove_overlay")
     }
 
     private fun removeSettingsOverlayIfIdle() {
@@ -746,10 +886,22 @@ class TaskControlPanelGlobalOverlay(
             recordingSaveDialogAnimatingOut ||
             settingsModal != null
         ) {
+            val blockSignature = "settings=$settingsVisible,dialog=$recordingSaveDialogVisible,anim=$recordingSaveDialogAnimatingOut,modal=${settingsModal != null}"
+            if (settingsOverlayIdleBlockSignature != blockSignature) {
+                settingsOverlayIdleBlockSignature = blockSignature
+                recordPanelVisibilityEvent(
+                    event = "settings_overlay.remove_if_idle.blocked",
+                    reason = blockSignature,
+                )
+            }
             return
         }
-        pendingSettingsOverlayRemoval = false
-        removeSettingsOverlay()
+        settingsOverlayIdleBlockSignature = ""
+        setPendingSettingsOverlayRemoval(
+            pending = false,
+            reason = "remove_if_idle_ready",
+        )
+        removeSettingsOverlay(reason = "remove_if_idle_ready")
         touchUi()
     }
 
@@ -758,7 +910,10 @@ class TaskControlPanelGlobalOverlay(
     ) {
         if (!recordingSaveDialogVisible && !recordingSaveDialogAnimatingOut) {
             if (removeOverlayWhenIdle && !settingsVisible) {
-                pendingSettingsOverlayRemoval = true
+                setPendingSettingsOverlayRemoval(
+                    pending = true,
+                    reason = "dismiss_recording_dialog_immediate",
+                )
                 removeSettingsOverlayIfIdle()
             }
             return
@@ -777,7 +932,10 @@ class TaskControlPanelGlobalOverlay(
         val shouldRemoveOverlay = removeSettingsOverlayAfterRecordingDialogExit
         removeSettingsOverlayAfterRecordingDialogExit = false
         if (shouldRemoveOverlay && !settingsVisible) {
-            pendingSettingsOverlayRemoval = true
+            setPendingSettingsOverlayRemoval(
+                pending = true,
+                reason = "recording_dialog_exit_settled",
+            )
         }
         touchUi()
     }
@@ -846,10 +1004,14 @@ class TaskControlPanelGlobalOverlay(
             return
         }
         panelDismissAnimating = true
+        recordPanelVisibilityEvent(
+            event = "panel_dismiss_animation.start",
+            reason = "user_close_panel",
+        )
         touchUi()
         scope.launch {
             delay(220)
-            hide()
+            hide(reason = "panel_dismiss_animation")
         }
     }
 
@@ -878,7 +1040,14 @@ class TaskControlPanelGlobalOverlay(
         ) {
             return
         }
-        panelDisplayMode = PanelDisplayMode.FULL
+        recordPanelVisibilityEvent(
+            event = "settings_panel.open",
+            reason = "from_main_panel",
+        )
+        setPanelDisplayMode(
+            mode = PanelDisplayMode.FULL,
+            reason = "open_settings_panel",
+        )
         panelNeedsEntryAnimation = false
         settingsVisible = true
         settingsDismissAnimating = false
@@ -888,7 +1057,10 @@ class TaskControlPanelGlobalOverlay(
         settingsRoute = SettingsRoute.TaskList
         settingsTask = null
         settingsEditorStore = null
-        pendingSettingsOverlayRemoval = false
+        setPendingSettingsOverlayRemoval(
+            pending = false,
+            reason = "open_settings_panel",
+        )
         ensureSettingsOverlayView()
         touchUi()
         scope.launch {
@@ -972,6 +1144,10 @@ class TaskControlPanelGlobalOverlay(
         taskId: String? = null,
         taskName: String? = null,
     ) {
+        recordPanelVisibilityEvent(
+            event = "settings_panel.open",
+            reason = "report_history taskId=${taskId ?: "-"}",
+        )
         runtimeReportHistoryTaskId = taskId
         runtimeReportHistoryTaskName = taskName?.ifBlank { null }
             ?: tasks.firstOrNull { it.taskId == taskId }?.name
@@ -989,7 +1165,10 @@ class TaskControlPanelGlobalOverlay(
         if (recordingSaveDialogVisible || settingsModal != null || panelMode == PanelMode.RECORDING) {
             return
         }
-        panelDisplayMode = PanelDisplayMode.FULL
+        setPanelDisplayMode(
+            mode = PanelDisplayMode.FULL,
+            reason = "open_report_history_overlay",
+        )
         panelNeedsEntryAnimation = false
         settingsVisible = true
         settingsDismissAnimating = false
@@ -999,7 +1178,10 @@ class TaskControlPanelGlobalOverlay(
         settingsRoute = SettingsRoute.ReportHistory
         settingsTask = null
         settingsEditorStore = null
-        pendingSettingsOverlayRemoval = false
+        setPendingSettingsOverlayRemoval(
+            pending = false,
+            reason = "open_report_history_overlay",
+        )
         ensureSettingsOverlayView()
         touchUi()
         scope.launch {
@@ -1038,26 +1220,48 @@ class TaskControlPanelGlobalOverlay(
 
     private fun requestRuntimeReportDelete(reportId: String) {
         settingsModal = SettingsModal.ConfirmDeleteRuntimeReport(reportId = reportId)
+        recordPanelVisibilityEvent(
+            event = "settings_modal.show",
+            reason = "confirm_delete_runtime_report:$reportId",
+        )
         touchUi()
     }
 
-    private fun dismissSettingsModal(removeOverlayWhenIdle: Boolean = false) {
+    private fun dismissSettingsModal(
+        removeOverlayWhenIdle: Boolean = false,
+        reason: String = "unspecified",
+    ) {
         if (settingsModal == null) {
             if (removeOverlayWhenIdle && !settingsVisible) {
-                pendingSettingsOverlayRemoval = true
+                setPendingSettingsOverlayRemoval(
+                    pending = true,
+                    reason = "dismiss_settings_modal_without_visible:$reason",
+                )
                 removeSettingsOverlayIfIdle()
             }
             return
         }
+        val dismissedType = settingsModal?.let { it::class.simpleName } ?: "Unknown"
         settingsModal = null
+        recordPanelVisibilityEvent(
+            event = "settings_modal.dismiss",
+            reason = "$reason:$dismissedType",
+        )
         if (removeOverlayWhenIdle && !settingsVisible) {
-            pendingSettingsOverlayRemoval = true
+            setPendingSettingsOverlayRemoval(
+                pending = true,
+                reason = "dismiss_settings_modal:$reason",
+            )
         }
         touchUi()
     }
 
     private fun onSettingsModalAction(actionKey: String) {
         val modal = settingsModal ?: return
+        recordPanelVisibilityEvent(
+            event = "settings_modal.action",
+            reason = "${modal::class.simpleName ?: "Unknown"}:$actionKey",
+        )
         when (modal) {
             is SettingsModal.ConfirmStartTask -> {
                 when (actionKey) {
@@ -1133,6 +1337,10 @@ class TaskControlPanelGlobalOverlay(
             touchUi()
             return
         }
+        recordPanelVisibilityEvent(
+            event = "settings_panel.open",
+            reason = "run_history",
+        )
         if (settingsVisible) {
             settingsRoute = SettingsRoute.RunHistory
             touchUi()
@@ -1141,7 +1349,10 @@ class TaskControlPanelGlobalOverlay(
         if (recordingSaveDialogVisible || settingsModal != null || panelMode == PanelMode.RECORDING) {
             return
         }
-        panelDisplayMode = PanelDisplayMode.FULL
+        setPanelDisplayMode(
+            mode = PanelDisplayMode.FULL,
+            reason = "open_run_history_overlay",
+        )
         panelNeedsEntryAnimation = false
         settingsVisible = true
         settingsDismissAnimating = false
@@ -1151,7 +1362,10 @@ class TaskControlPanelGlobalOverlay(
         settingsRoute = SettingsRoute.RunHistory
         settingsTask = null
         settingsEditorStore = null
-        pendingSettingsOverlayRemoval = false
+        setPendingSettingsOverlayRemoval(
+            pending = false,
+            reason = "open_run_history_overlay",
+        )
         ensureSettingsOverlayView()
         touchUi()
         scope.launch {
@@ -1165,7 +1379,14 @@ class TaskControlPanelGlobalOverlay(
         if (!settingsVisible || settingsDismissAnimating) {
             return
         }
-        panelDisplayMode = PanelDisplayMode.FULL
+        recordPanelVisibilityEvent(
+            event = "settings_panel.close.start",
+            reason = "route=${settingsRoute::class.simpleName ?: "Unknown"}",
+        )
+        setPanelDisplayMode(
+            mode = PanelDisplayMode.FULL,
+            reason = "close_settings_panel",
+        )
         settingsDismissAnimating = true
         settingsSheetVisible = false
         touchUi()
@@ -1178,7 +1399,10 @@ class TaskControlPanelGlobalOverlay(
             settingsRoute = SettingsRoute.TaskList
             settingsTask = null
             settingsEditorStore = null
-            pendingSettingsOverlayRemoval = true
+            setPendingSettingsOverlayRemoval(
+                pending = true,
+                reason = "close_settings_panel_animation_done",
+            )
             touchUi()
             afterClosed?.invoke()
         }
@@ -2518,10 +2742,17 @@ class TaskControlPanelGlobalOverlay(
         }
         val taskName = tasks.firstOrNull { it.taskId == candidateTaskId }?.name ?: "未命名任务"
         ensureSettingsOverlayView()
-        pendingSettingsOverlayRemoval = false
+        setPendingSettingsOverlayRemoval(
+            pending = false,
+            reason = "prompt_start_task_confirmation",
+        )
         settingsModal = SettingsModal.ConfirmStartTask(
             taskId = candidateTaskId,
             taskName = taskName,
+        )
+        recordPanelVisibilityEvent(
+            event = "settings_modal.show",
+            reason = "confirm_start_task:$candidateTaskId",
         )
         touchUi()
     }
@@ -2904,7 +3135,10 @@ class TaskControlPanelGlobalOverlay(
         stopRecordingTicker(resetElapsed = false)
         recordingSaveTaskName = buildDefaultRecordedTaskName()
         ensureSettingsOverlayView()
-        pendingSettingsOverlayRemoval = false
+        setPendingSettingsOverlayRemoval(
+            pending = false,
+            reason = "stop_recording_prompt_save",
+        )
         recordingSaveDialogOpenToken++
         recordingSaveDialogAnimatingOut = false
         removeSettingsOverlayAfterRecordingDialogExit = false

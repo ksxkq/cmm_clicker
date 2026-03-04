@@ -559,11 +559,34 @@
 490. 稳定性验证：以上“运行态去历史入口 + 暂停控制”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
 491. RUNNING 面板按钮位置优化：暂停按钮移动到停止按钮右侧；最小化按钮移动到运行面板右上角，保留“左侧执行控制、右上角收起”一致布局语义。
 492. 稳定性验证：以上“运行态按钮位置调整”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+493. RUNNING_MINI 暂停态一致化：运行中最小化面板新增【暂停/继续】直达控制（无需先恢复到 FULL），并保留【停止】与“恢复面板”快捷操作，确保 FULL/MINI 两态控制语义一致。
+494. 运行会话可观测增强：暂停/继续操作会写入当前会话事件（`uiEvent=panel_control`），并同步更新 `currentRunMessage`，便于在“本次执行历史”中还原用户控制行为。
+495. 稳定性验证：以上“RUNNING_MINI 暂停一致化 + 控制事件记录”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+496. 历史列表可读性增强：`TaskControlRuntimeReportHistoryPage` 新增关键字搜索（任务名/状态/错误码/摘要/traceId/reportId）、状态筛选（全部/完成/失败/停止）与结果计数显示（显示数/筛选数/总数）。
+497. 历史空态细分与分页：区分“暂无历史记录”与“筛选无结果”两类空态；列表新增本地“加载更多”分页（每次 20 条），降低长列表滚动负担。
+498. 交互补齐与稳定性验证：历史页新增【清空筛选】并在刷新时重置可见页大小；以上“历史搜索/筛选/分页”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+499. 历史详情分享链路落地：`TaskControlRuntimeReportDetailPage` 新增【分享】按钮，输出结构化文本摘要（任务状态、时序、校验问题、关键事件）并触发系统分享面板。
+500. Overlay 分享兼容：`TaskControlPanelGlobalOverlay` 新增 `shareRuntimeReportDetail()`，通过 `Intent.ACTION_SEND` + `FLAG_ACTIVITY_NEW_TASK` 调起系统分享，避免 overlay 场景下启动 Activity 失败。
+501. 稳定性验证：以上“历史详情分享链路”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+502. 历史筛选逻辑抽离：新增 `TaskControlPanelReportHistoryFilter.kt`，将关键字匹配、状态筛选、可见分页与“可继续加载”判断下沉为纯函数，避免逻辑散落在 Compose 页面中。
+503. 单测补齐：新增 `TaskControlPanelReportHistoryFilterTest`，覆盖状态筛选、关键字命中、分页可见数与 `canLoadMore` 判定，提升后续 UI 调整的回归保障。
+504. 稳定性验证：以上“历史筛选逻辑抽离 + 单测补齐”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+505. 任务级历史切换优化：当历史页处于“仅显示任务”作用域时，新增【查看全部】快捷按钮，可一键清除 `taskId` 过滤并刷新全量历史，减少返回路径成本。
+506. 历史页交互补齐：`TaskControlRuntimeReportHistoryPage` 新增 `isTaskScoped/onClearTaskScope` 接口，浮窗层新增 `clearReportHistoryTaskScope()` 统一处理过滤上下文回收。
+507. 稳定性验证：以上“任务级历史一键回到全量”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+508. 分享文本单测补齐：新增 `TaskControlPanelReportHistoryDetailShareTextTest`，覆盖 `toShareText()` 的核心字段输出与“超限内容 +N more”截断标记，防止后续改动丢失关键排查信息。
+509. 历史页稳定性增强：本轮新增分享链路/筛选链路均具备对应可测试逻辑（纯函数与文本生成），减少 UI 重构导致的隐式行为漂移风险。
+510. 稳定性验证：以上“分享文本单测补齐”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+511. 按需求移除历史分享：删除历史详情页【分享】按钮、`shareRuntimeReportDetail()` 与 `toShareText()` 文本导出逻辑，回退为“仅详情查看 + 删除”交互边界。
+512. 分享相关测试清理：删除 `TaskControlPanelReportHistoryDetailShareTextTest`，避免保留已下线能力的测试资产；保留历史筛选/分页相关单测。
+513. 运行态状态拆分（阶段二-继续）：新增 `TaskControlPanelRunningState`（`start/reset/applyTrace/applyResult/togglePause`），将 `RUNNING` 面板核心字段从 `TaskControlPanelGlobalOverlay` 分散状态收敛为单一状态对象。
+514. 运行态状态单测补齐：新增 `TaskControlPanelRunningStateTest`，覆盖初始化、trace 更新、暂停切换、结果落盘映射，降低后续运行态 UI 调整回归风险。
+515. 稳定性验证：以上“移除历史分享 + 运行态状态收敛”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
 
 ## 3. 正在进行
 
 1. 全局操作面板实机交互打磨（录制态按钮间距/状态文案/误触控制、运行态信息密度与按钮排布、录制提示层反馈）。
-2. 调试面板前置能力推进：已打通“任务菜单历史记录入口 + 删除能力”，下一步继续补齐筛选、搜索、分页与分享链路。
+2. 调试面板前置能力推进：已打通“任务菜单历史记录入口 + 删除能力”，下一步继续补齐筛选、搜索与分页体验。
 3. 继续推进页面状态层拆分第二阶段：把 `TaskControlPanelGlobalOverlay` 的编辑/运行状态进一步拆成可复用状态模型与控制器，降低超长文件维护成本（已先完成图形预览子模块抽离）。
 4. 编辑页组件化：`TaskList/ActionList/NodeEditor`、状态容器、规则逻辑与单测已完成；当前进入实机联调与体验回归阶段。
 5. 录制多指会话实机打磨（手指数上限、停顿阈值、不同机型采样密度）。

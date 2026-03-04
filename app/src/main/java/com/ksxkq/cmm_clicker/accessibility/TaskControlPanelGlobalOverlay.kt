@@ -322,7 +322,7 @@ class TaskControlPanelGlobalOverlay(
     private var settingsTask by mutableStateOf<TaskRecord?>(null)
     private var settingsEditorStore by mutableStateOf<TaskGraphEditorStore?>(null)
     private var running by mutableStateOf(false)
-    private var runningPaused by mutableStateOf(false)
+    private var runningPanelState by mutableStateOf(RunningPanelState())
     private var recording by mutableStateOf(false)
     private var recordingPaused by mutableStateOf(false)
     private var replayingGesture by mutableStateOf(false)
@@ -334,12 +334,6 @@ class TaskControlPanelGlobalOverlay(
     private var recordedStepCount by mutableIntStateOf(0)
     private var recordingElapsedMs by mutableLongStateOf(0L)
     private var statusText by mutableStateOf("")
-    private var runningTaskName by mutableStateOf("")
-    private var runningStepCount by mutableIntStateOf(0)
-    private var runningCurrentFlowId by mutableStateOf("")
-    private var runningCurrentNodeId by mutableStateOf("")
-    private var runningLastMessage by mutableStateOf("")
-    private var runningLastErrorCode by mutableStateOf("")
     private var currentRunTraceId by mutableStateOf("")
     private var currentRunTaskId by mutableStateOf("")
     private var currentRunTaskName by mutableStateOf("")
@@ -1237,6 +1231,18 @@ class TaskControlPanelGlobalOverlay(
         )
     }
 
+    private fun clearReportHistoryTaskScope() {
+        if (runtimeReportHistoryTaskId.isNullOrBlank()) {
+            return
+        }
+        runtimeReportHistoryTaskId = null
+        runtimeReportHistoryTaskName = ""
+        refreshRuntimeReportHistory(
+            message = "已切换到全部历史",
+            withCount = true,
+        )
+    }
+
     private fun openRuntimeReportDetail(reportId: String) {
         settingsModal = null
         runtimeReportDetail = null
@@ -1658,22 +1664,22 @@ class TaskControlPanelGlobalOverlay(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Icon(
-                                imageVector = if (runningPaused) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                                contentDescription = if (runningPaused) "已暂停" else "运行中",
+                                imageVector = if (runningPanelState.paused) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                contentDescription = if (runningPanelState.paused) "已暂停" else "运行中",
                                 tint = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier
                                     .size(18.dp)
                                     .graphicsLayer {
-                                        if (!runningPaused) {
+                                        if (!runningPanelState.paused) {
                                             rotationZ = runningMiniRotation
                                         }
                                     },
                             )
                             Text(
-                                text = if (runningPaused) {
-                                    "已暂停 $runningStepCount 步"
+                                text = if (runningPanelState.paused) {
+                                    "已暂停 ${runningPanelState.stepCount} 步"
                                 } else {
-                                    "运行中 $runningStepCount 步"
+                                    "运行中 ${runningPanelState.stepCount} 步"
                                 },
                                 modifier = Modifier.weight(1f),
                                 style = MaterialTheme.typography.bodySmall,
@@ -1689,9 +1695,9 @@ class TaskControlPanelGlobalOverlay(
                         ) {
                             OutlinedButton(
                                 modifier = Modifier.weight(1f),
-                                onClick = { restorePanelFromMini() },
+                                onClick = { toggleRunningPause() },
                             ) {
-                                Text("恢复")
+                                Text(if (runningPanelState.paused) "继续" else "暂停")
                             }
                             OutlinedButton(
                                 modifier = Modifier.weight(1f),
@@ -1699,6 +1705,18 @@ class TaskControlPanelGlobalOverlay(
                             ) {
                                 Text("停止")
                             }
+                            CircleActionIconButton(
+                                enabled = running,
+                                onClick = { restorePanelFromMini() },
+                                icon = { tint ->
+                                    Icon(
+                                        imageVector = Icons.Rounded.PlayArrow,
+                                        contentDescription = "恢复运行面板",
+                                        tint = tint,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                },
+                            )
                         }
                     } else {
                         Row(
@@ -1791,8 +1809,8 @@ class TaskControlPanelGlobalOverlay(
                         }
 
                         PanelMode.RUNNING -> {
-                            val errorCodeText = runningLastErrorCode.ifBlank { "-" }
-                            val hasErrorCode = runningLastErrorCode.isNotBlank()
+                            val errorCodeText = runningPanelState.lastErrorCode.ifBlank { "-" }
+                            val hasErrorCode = runningPanelState.lastErrorCode.isNotBlank()
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -1824,12 +1842,12 @@ class TaskControlPanelGlobalOverlay(
                                         )
                                         CircleActionIconButton(
                                             enabled = running,
-                                            filled = runningPaused,
+                                            filled = runningPanelState.paused,
                                             onClick = { toggleRunningPause() },
                                             icon = { tint ->
                                                 Icon(
-                                                    imageVector = if (runningPaused) Icons.Rounded.PlayArrow else Icons.Rounded.Pause,
-                                                    contentDescription = if (runningPaused) "继续执行" else "暂停任务",
+                                                    imageVector = if (runningPanelState.paused) Icons.Rounded.PlayArrow else Icons.Rounded.Pause,
+                                                    contentDescription = if (runningPanelState.paused) "继续执行" else "暂停任务",
                                                     tint = tint,
                                                     modifier = Modifier.size(16.dp),
                                                 )
@@ -1837,7 +1855,7 @@ class TaskControlPanelGlobalOverlay(
                                         )
                                         Text(
                                             modifier = Modifier.weight(1f),
-                                            text = "已执行 $runningStepCount 步",
+                                            text = "已执行 ${runningPanelState.stepCount} 步",
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                                             maxLines = 1,
@@ -1858,14 +1876,14 @@ class TaskControlPanelGlobalOverlay(
                                     )
                                 }
                                 Text(
-                                    text = "任务：${runningTaskName.ifBlank { "未命名任务" }}",
+                                    text = "任务：${runningPanelState.taskName.ifBlank { "未命名任务" }}",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                 )
                                 Text(
-                                    text = "当前：${runningCurrentFlowId.ifBlank { "-" }}/${runningCurrentNodeId.ifBlank { "-" }}",
+                                    text = "当前：${runningPanelState.currentFlowId.ifBlank { "-" }}/${runningPanelState.currentNodeId.ifBlank { "-" }}",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 1,
@@ -1883,7 +1901,7 @@ class TaskControlPanelGlobalOverlay(
                                     overflow = TextOverflow.Ellipsis,
                                 )
                                 Text(
-                                    text = "状态：${runningLastMessage.ifBlank { "运行中..." }}",
+                                    text = "状态：${runningPanelState.lastMessage.ifBlank { "运行中..." }}",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 1,
@@ -2672,10 +2690,12 @@ class TaskControlPanelGlobalOverlay(
         TaskControlRuntimeReportHistoryPage(
             history = runtimeReportHistory,
             taskScopeLabel = taskScopeLabel,
+            isTaskScoped = !runtimeReportHistoryTaskId.isNullOrBlank(),
             statusMessage = runtimeReportHistoryMessage,
             onRefresh = {
                 refreshRuntimeReportHistory(message = "已刷新", withCount = true)
             },
+            onClearTaskScope = ::clearReportHistoryTaskScope,
             onOpenDetail = ::openRuntimeReportDetail,
             onDeleteRequest = ::requestRuntimeReportDelete,
         )
@@ -2883,27 +2903,15 @@ class TaskControlPanelGlobalOverlay(
             mode = PanelDisplayMode.FULL,
             reason = "begin_running_panel",
         )
-        runningPaused = false
         runningPauseRequested = false
-        runningTaskName = task.name.ifBlank { "未命名任务" }
-        runningStepCount = 0
-        runningCurrentFlowId = "-"
-        runningCurrentNodeId = "-"
-        runningLastMessage = "等待执行..."
-        runningLastErrorCode = ""
+        runningPanelState = runningPanelState.startWithTask(task.name)
         beginCurrentRunSession(task)
     }
 
     private fun resetRunningPanelState() {
         setPanelHideReason(PanelHideReason.RUNNING_TEMP, hidden = false)
-        runningPaused = false
         runningPauseRequested = false
-        runningTaskName = ""
-        runningStepCount = 0
-        runningCurrentFlowId = ""
-        runningCurrentNodeId = ""
-        runningLastMessage = ""
-        runningLastErrorCode = ""
+        runningPanelState = runningPanelState.reset()
     }
 
     private fun beginCurrentRunSession(task: TaskRecord) {
@@ -2958,17 +2966,17 @@ class TaskControlPanelGlobalOverlay(
         if (!hasCurrentRunSession()) {
             return null
         }
-        val taskName = currentRunTaskName.ifBlank { runningTaskName }
+        val taskName = currentRunTaskName.ifBlank { runningPanelState.taskName }
         val status = currentRunStatus.ifBlank {
             if (running) "RUNNING" else "-"
         }
         val message = currentRunMessage.ifBlank {
-            runningLastMessage
+            runningPanelState.lastMessage
         }
         val errorCode = currentRunErrorCode.ifBlank {
-            runningLastErrorCode
+            runningPanelState.lastErrorCode
         }
-        val stepCount = maxOf(currentRunStepCount, runningStepCount)
+        val stepCount = maxOf(currentRunStepCount, runningPanelState.stepCount)
         return TaskControlRunHistorySnapshot(
             traceId = currentRunTraceId,
             taskId = currentRunTaskId,
@@ -2985,49 +2993,18 @@ class TaskControlPanelGlobalOverlay(
 
     private fun updateRunningPanelFromTrace(event: RuntimeTraceEvent) {
         updateCurrentRunSessionFromTrace(event)
-        runningCurrentFlowId = event.flowId
-        runningCurrentNodeId = event.nodeId
-        runningStepCount = maxOf(runningStepCount, event.step + 1)
-        when (event.phase) {
-            RuntimeTracePhase.NODE_START -> {
-                runningLastMessage = "执行中"
-            }
-
-            RuntimeTracePhase.NODE_END -> {
-                runningLastMessage = event.message?.takeIf { it.isNotBlank() } ?: "动作已完成"
-            }
-
-            RuntimeTracePhase.NODE_ERROR -> {
-                runningLastMessage = event.message?.takeIf { it.isNotBlank() } ?: "执行失败"
-                runningLastErrorCode = event.details["errorCode"]
-                    ?.takeIf { it.isNotBlank() && it != "-" }
-                    ?: runningLastErrorCode
-            }
-        }
+        runningPanelState = runningPanelState.applyTrace(event)
     }
 
     private fun updateRunningPanelFromResult(result: RuntimeExecutionResult) {
-        runningStepCount = result.stepCount.coerceAtLeast(runningStepCount)
-        val errorCode = result.traceEvents
-            .lastOrNull { it.phase == RuntimeTracePhase.NODE_ERROR }
-            ?.details
-            ?.get("errorCode")
-            ?.takeIf { it.isNotBlank() && it != "-" }
-        if (!errorCode.isNullOrBlank()) {
-            runningLastErrorCode = errorCode
-        }
-        runningLastMessage = when (result.status) {
-            RuntimeExecutionStatus.COMPLETED -> "执行完成"
-            RuntimeExecutionStatus.STOPPED -> "已停止"
-            RuntimeExecutionStatus.FAILED -> result.message?.takeIf { it.isNotBlank() } ?: "执行失败"
-        }
+        runningPanelState = runningPanelState.applyResult(result)
         if (currentRunTraceId.isBlank()) {
             currentRunTraceId = result.traceId
         }
         finalizeCurrentRunSession(
             status = result.status.name,
-            message = result.message ?: runningLastMessage,
-            errorCode = runningLastErrorCode,
+            message = result.message ?: runningPanelState.lastMessage,
+            errorCode = runningPanelState.lastErrorCode,
             stepCount = result.stepCount,
         )
     }
@@ -3036,16 +3013,43 @@ class TaskControlPanelGlobalOverlay(
         if (!running || runTaskJob?.isActive != true) {
             return
         }
-        val paused = !runningPaused
-        runningPaused = paused
+        runningPanelState = runningPanelState.togglePause()
+        val paused = runningPanelState.paused
         runningPauseRequested = paused
-        runningLastMessage = if (paused) "任务已暂停" else "任务继续执行"
+        currentRunMessage = if (paused) "paused_by_user" else "resumed_by_user"
+        appendCurrentRunControlEvent(
+            message = if (paused) "paused_by_user" else "resumed_by_user",
+            details = mapOf(
+                "paused" to paused.toString(),
+                "step" to runningPanelState.stepCount.toString(),
+            ),
+        )
         statusText = if (paused) "运行已暂停" else "运行已继续"
         recordPanelVisibilityEvent(
             event = "running_pause_toggle",
             reason = "paused=$paused",
         )
         touchUi()
+    }
+
+    private fun appendCurrentRunControlEvent(
+        message: String,
+        details: Map<String, String> = emptyMap(),
+    ) {
+        if (!hasCurrentRunSession()) {
+            return
+        }
+        val controlEvent = RuntimeTraceEvent(
+            traceId = currentRunTraceId.ifBlank { "overlay_control" },
+            step = runningPanelState.stepCount,
+            flowId = runningPanelState.currentFlowId.ifBlank { "-" },
+            nodeId = "__panel_control__",
+            nodeKind = NodeKind.ACTION,
+            phase = RuntimeTracePhase.NODE_END,
+            message = message,
+            details = details + ("uiEvent" to "panel_control"),
+        )
+        currentRunEvents = (currentRunEvents + controlEvent).takeLast(600)
     }
 
     private fun startLastTask(preferredTaskId: String? = null) {
@@ -3128,34 +3132,30 @@ class TaskControlPanelGlobalOverlay(
                 statusText = summary
                 touchUi()
             } catch (_: CancellationException) {
-                runningPaused = false
                 runningPauseRequested = false
-                runningLastMessage = "用户已停止"
-                runningLastErrorCode = ""
+                runningPanelState = runningPanelState.withUserStopped()
                 finalizeCurrentRunSession(
                     status = RuntimeExecutionStatus.STOPPED.name,
                     message = "user_requested_stop",
                     errorCode = "",
-                    stepCount = runningStepCount,
+                    stepCount = runningPanelState.stepCount,
                 )
                 statusText = "任务已停止"
                 touchUi()
             } catch (error: Throwable) {
-                runningPaused = false
                 runningPauseRequested = false
-                runningLastMessage = "运行异常"
-                runningLastErrorCode = ""
+                runningPanelState = runningPanelState.withRuntimeError(message = "运行异常")
                 finalizeCurrentRunSession(
                     status = RuntimeExecutionStatus.FAILED.name,
                     message = error.message ?: "unknown",
                     errorCode = "",
-                    stepCount = runningStepCount,
+                    stepCount = runningPanelState.stepCount,
                 )
                 statusText = "运行失败: ${error.message ?: "unknown"}"
                 touchUi()
             } finally {
                 running = false
-                runningPaused = false
+                runningPanelState = runningPanelState.copy(paused = false)
                 runningPauseRequested = false
                 if (panelHideReasons[PanelHideReason.RUNNING_TEMP] == true) {
                     setPanelHideReason(PanelHideReason.RUNNING_TEMP, hidden = false)
@@ -3182,7 +3182,7 @@ class TaskControlPanelGlobalOverlay(
             touchUi()
             return
         }
-        runningLastMessage = "正在停止..."
+        runningPanelState = runningPanelState.withStoppingMessage()
         statusText = "正在停止任务..."
         touchUi()
         job.cancel(CancellationException("user_requested_stop"))

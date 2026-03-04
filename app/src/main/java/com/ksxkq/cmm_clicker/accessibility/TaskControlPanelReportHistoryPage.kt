@@ -6,12 +6,22 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -24,20 +34,97 @@ import java.util.Locale
 internal fun TaskControlRuntimeReportHistoryPage(
     history: List<RuntimeRunReportSummary>,
     taskScopeLabel: String?,
+    isTaskScoped: Boolean,
     statusMessage: String,
     onRefresh: () -> Unit,
+    onClearTaskScope: () -> Unit,
     onOpenDetail: (String) -> Unit,
     onDeleteRequest: (String) -> Unit,
 ) {
+    val stateResetKey = remember(taskScopeLabel, history.firstOrNull()?.reportId) {
+        "${taskScopeLabel.orEmpty()}|${history.firstOrNull()?.reportId.orEmpty()}"
+    }
+    var searchQuery by rememberSaveable(stateResetKey) { mutableStateOf("") }
+    var statusFilter by rememberSaveable(stateResetKey) { mutableStateOf(ReportHistoryStatusFilterOption.ALL.name) }
+    var visibleCount by rememberSaveable(stateResetKey) { mutableIntStateOf(REPORT_HISTORY_PAGE_SIZE) }
+
+    val activeStatusFilter = remember(statusFilter) {
+        ReportHistoryStatusFilterOption.fromName(statusFilter)
+    }
+    val filterResult = remember(history, activeStatusFilter, searchQuery, visibleCount) {
+        filterRuntimeReportHistory(
+            history = history,
+            searchQuery = searchQuery,
+            statusFilter = activeStatusFilter,
+            visibleCount = visibleCount,
+            pageSize = REPORT_HISTORY_PAGE_SIZE,
+        )
+    }
+    val filteredHistory = filterResult.filteredHistory
+    val visibleHistory = filterResult.visibleHistory
+    val canLoadMore = filterResult.canLoadMore
+
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         OutlinedButton(
             modifier = Modifier.weight(1f),
-            onClick = onRefresh,
+            onClick = {
+                visibleCount = REPORT_HISTORY_PAGE_SIZE
+                onRefresh()
+            },
         ) {
             Text("刷新")
+        }
+        OutlinedButton(
+            modifier = Modifier.weight(1f),
+            onClick = {
+                searchQuery = ""
+                statusFilter = ReportHistoryStatusFilterOption.ALL.name
+                visibleCount = REPORT_HISTORY_PAGE_SIZE
+            },
+        ) {
+            Text("清空筛选")
+        }
+    }
+
+    OutlinedTextField(
+        modifier = Modifier.fillMaxWidth(),
+        value = searchQuery,
+        onValueChange = { next ->
+            searchQuery = next
+            visibleCount = REPORT_HISTORY_PAGE_SIZE
+        },
+        singleLine = true,
+        label = { Text("搜索任务/状态/错误码") },
+    )
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        ReportHistoryStatusFilterOption.entries.forEach { option ->
+            val selected = option == activeStatusFilter
+            if (selected) {
+                Button(
+                    onClick = {},
+                    enabled = false,
+                ) {
+                    Text(option.label)
+                }
+            } else {
+                OutlinedButton(
+                    onClick = {
+                        statusFilter = option.name
+                        visibleCount = REPORT_HISTORY_PAGE_SIZE
+                    },
+                ) {
+                    Text(option.label)
+                }
+            }
         }
     }
 
@@ -49,12 +136,28 @@ internal fun TaskControlRuntimeReportHistoryPage(
         )
     }
     if (!taskScopeLabel.isNullOrBlank()) {
-        Text(
-            text = taskScopeLabel,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                modifier = Modifier.weight(1f),
+                text = taskScopeLabel,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (isTaskScoped) {
+                OutlinedButton(onClick = onClearTaskScope) {
+                    Text("查看全部")
+                }
+            }
+        }
     }
+    Text(
+        text = "显示 ${visibleHistory.size} / ${filteredHistory.size} 条（总 ${history.size} 条）",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 
     if (history.isEmpty()) {
         Text(
@@ -66,8 +169,14 @@ internal fun TaskControlRuntimeReportHistoryPage(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+    } else if (filteredHistory.isEmpty()) {
+        Text(
+            text = "没有匹配的历史记录，请调整搜索词或筛选条件",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     } else {
-        history.forEach { item ->
+        visibleHistory.forEach { item ->
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -127,8 +236,17 @@ internal fun TaskControlRuntimeReportHistoryPage(
                 }
             }
         }
+        if (canLoadMore) {
+            OutlinedButton(
+                modifier = Modifier.fillMaxWidth(),
+                onClick = {
+                    visibleCount += REPORT_HISTORY_PAGE_SIZE
+                },
+            ) {
+                Text("加载更多")
+            }
+        }
     }
-
 }
 
 private fun formatEpochMs(value: Long?): String {

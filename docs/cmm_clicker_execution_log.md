@@ -495,11 +495,32 @@
 426. 运行面板防抖优化：`RUNNING` 卡片改为固定高度并统一 5 行信息槽位（含错误码占位），避免信息行出现/消失引发卡片高度跳变。
 427. 文本稳定性优化：运行态关键字段（任务名/当前节点/状态/错误码）全部限制为单行省略，消除长文案换行导致的布局闪烁。
 428. 稳定性验证：以上“运行面板高度稳定化”改造后再次通过 `:app:compileDebugKotlin`。
+429. 本次执行历史页（MVP）落地：新增 `TaskControlRunHistoryPage`，在浮窗内展示“当前/最近一次执行”的摘要与逐步事件时间线（step、phase、flow/node、message、details）。
+430. 路由扩展：`SettingsRoute` 新增 `RunHistory`，并接入设置弹窗层级导航；支持从“任务设置”页顶部入口打开本次执行历史。
+431. 运行面板快捷入口：`RUNNING` 状态新增“本次执行历史”快捷按钮（`...`），执行中可直接跳转到历史页查看步骤细节。
+432. 会话态追踪补齐：浮窗内新增本次执行会话状态缓存（traceId/task/status/step/startedAt/finishedAt/events），运行结束后仍可在历史页查看本次完整轨迹。
+433. 稳定性验证：以上“本次执行历史页 + 路由扩展 + 会话缓存”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+434. 任务菜单新增“历史记录”入口：`TaskControlPanelGlobalOverlay` 的 `SettingsTaskListLayer` 头部操作改为内置“历史记录”按钮（常驻）+“本次执行历史”（有会话时显示），统一由设置弹窗路由承接。
+435. 历史记录列表页接入：设置路由新增 `SettingsRoute.ReportHistory`，并复用 `TaskControlRuntimeReportHistoryPage` 展示最近运行摘要列表，支持刷新、复制单条 JSON、删除单条记录。
+436. 数据链路统一：浮窗层新增 `runtimeReportHistory/runtimeReportHistoryMessage` 统一状态源；`startLastTask` 在运行报告落库后自动刷新历史列表，确保“每次执行都出现在历史记录入口”。
+437. 稳定性验证：以上“任务菜单历史记录入口 + 列表可删”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+438. 任务 item 更多菜单增强：`TaskLibraryPanel` 新增 `onTaskHistory(taskId)` 回调，并在每个任务卡片的“更多”菜单中加入【历史记录】入口（位置：重命名与删除之间）。
+439. 历史记录按任务过滤：浮窗层新增 `runtimeReportHistoryTaskId/runtimeReportHistoryTaskName` 过滤状态；从任务 item 打开历史时仅查询并展示该任务记录（顶部入口仍可看全部历史）。
+440. 稳定性验证：以上“任务菜单按任务查看历史”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+441. 历史记录页能力补全：`TaskControlRuntimeReportHistoryPage` 新增【详情】入口并透传 `onOpenDetail(reportId)`，恢复“从历史列表进入历史详情”链路。
+442. 历史详情组件化：新增独立页面组件 `TaskControlRuntimeReportDetailPage`（摘要、校验问题、步骤事件、复制 JSON），与历史列表组件分离，避免列表页承担详情渲染职责。
+443. 浮窗路由扩展：`SettingsRoute` 新增 `ReportHistoryDetail(reportId)`，支持“历史列表 -> 历史详情 -> 返回历史列表”的层级导航与遮罩返回逻辑。
+444. 仓库解析能力补齐：`RuntimeRunReportRepository` 新增 `findDetailByReportId(reportId)`，并提供结构化详情模型（含 validationIssues/traceEvents），避免 UI 直接解析原始 JSON。
+445. 稳定性验证：以上“历史详情回归 + 组件拆分”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+446. 历史详情交互增强：在历史详情页新增【上一条 / 下一条】切换按钮，支持在当前筛选集合内连续排查记录，无需返回列表重复点选。
+447. 操作收敛：按需求移除历史列表与历史详情中的【复制 JSON】入口，避免暴露不需要的操作。
+448. 删除崩溃修复：`SharedOverlayDialogScaffold` 内容区滚动改为“仅在高度有限时启用 `verticalScroll`”，规避删除后重组阶段出现无限高度约束导致的 `IllegalStateException`。
+449. 稳定性验证：以上“去除复制 JSON + 详情上下条 + 删除崩溃修复”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
 
 ## 3. 正在进行
 
 1. 全局操作面板实机交互打磨（录制态按钮间距/状态文案/误触控制、运行态信息密度与按钮排布、录制提示层反馈）。
-2. 调试面板前置能力推进：基于已落地的运行历史列表，继续补齐筛选、搜索、分页与分享链路。
+2. 调试面板前置能力推进：已打通“任务菜单历史记录入口 + 删除能力”，下一步继续补齐筛选、搜索、分页与分享链路。
 3. 继续推进页面状态层拆分第二阶段：把 `TaskControlPanelGlobalOverlay` 的编辑/运行状态进一步拆成可复用状态模型与控制器，降低超长文件维护成本（已先完成图形预览子模块抽离）。
 4. 编辑页组件化：`TaskList/ActionList/NodeEditor`、状态容器、规则逻辑与单测已完成；当前进入实机联调与体验回归阶段。
 5. 录制多指会话实机打磨（手指数上限、停顿阈值、不同机型采样密度）。
@@ -527,3 +548,4 @@
 8. 目前编辑链路集中在 `TaskControlPanelGlobalOverlay` 单文件内，后续重构需确保录制控制与任务编辑状态拆分后仍保持单向数据流，避免状态互相污染。
 9. 运行时“执行前顺序边兜底”当前只在检测到 `END` 节点后仍存在可执行节点时触发；若后续引入更复杂的非线性流程模板，需要评估是否扩展为更通用的迁移/修复策略。
 10. 运行态面板当前逐条消费 trace 事件并触发 UI 刷新；若后续出现高频动作导致面板刷新过密，需要引入节流或批量更新策略。
+11. 本次执行历史页当前以会话内缓存展示（重启/隐藏后不保留当前会话态）；若后续需要跨会话回看，可考虑增加按 `reportId` 的详情解析与固定入口。

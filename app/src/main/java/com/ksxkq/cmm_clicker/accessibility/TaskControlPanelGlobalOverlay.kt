@@ -135,7 +135,9 @@ import com.ksxkq.cmm_clicker.feature.editor.EditorParamValidator
 import com.ksxkq.cmm_clicker.feature.editor.ParamFieldDefinition
 import com.ksxkq.cmm_clicker.feature.editor.TaskGraphEditorState
 import com.ksxkq.cmm_clicker.feature.editor.TaskGraphEditorStore
+import com.ksxkq.cmm_clicker.feature.debug.RuntimeRunReportDetail
 import com.ksxkq.cmm_clicker.feature.debug.RuntimeRunReportRepository
+import com.ksxkq.cmm_clicker.feature.debug.RuntimeRunReportSummary
 import com.ksxkq.cmm_clicker.feature.task.LocalFileTaskRepository
 import com.ksxkq.cmm_clicker.feature.task.TaskRecord
 import com.ksxkq.cmm_clicker.ui.AppDropdownMenu
@@ -177,6 +179,7 @@ class TaskControlPanelGlobalOverlay(
         private const val AUX_OVERLAY_SCRIM_FADE_MS = 220
         private const val CLICK_PICKER_SCRIM_ALPHA = 0.08f
         private const val ACTION_LIST_MAX_VISIBLE_JUMP_LANES = 3
+        private const val RUNTIME_REPORT_HISTORY_LIMIT = 80
     }
 
     private data class RecordedStroke(
@@ -213,6 +216,14 @@ class TaskControlPanelGlobalOverlay(
         data object TaskList : SettingsRoute
 
         data object ActionList : SettingsRoute
+
+        data object RunHistory : SettingsRoute
+
+        data object ReportHistory : SettingsRoute
+
+        data class ReportHistoryDetail(
+            val reportId: String,
+        ) : SettingsRoute
 
         data class NodeEditor(
             val nodeId: String,
@@ -277,6 +288,22 @@ class TaskControlPanelGlobalOverlay(
     private var runningCurrentNodeId by mutableStateOf("")
     private var runningLastMessage by mutableStateOf("")
     private var runningLastErrorCode by mutableStateOf("")
+    private var currentRunTraceId by mutableStateOf("")
+    private var currentRunTaskId by mutableStateOf("")
+    private var currentRunTaskName by mutableStateOf("")
+    private var currentRunStatus by mutableStateOf("")
+    private var currentRunStepCount by mutableIntStateOf(0)
+    private var currentRunStartedAtEpochMs by mutableLongStateOf(0L)
+    private var currentRunFinishedAtEpochMs by mutableLongStateOf(0L)
+    private var currentRunMessage by mutableStateOf("")
+    private var currentRunErrorCode by mutableStateOf("")
+    private var currentRunEvents by mutableStateOf<List<RuntimeTraceEvent>>(emptyList())
+    private var runtimeReportHistory by mutableStateOf<List<RuntimeRunReportSummary>>(emptyList())
+    private var runtimeReportHistoryMessage by mutableStateOf("")
+    private var runtimeReportHistoryTaskId by mutableStateOf<String?>(null)
+    private var runtimeReportHistoryTaskName by mutableStateOf("")
+    private var runtimeReportDetail by mutableStateOf<RuntimeRunReportDetail?>(null)
+    private var runtimeReportDetailMessage by mutableStateOf("")
     private var uiRevision by mutableIntStateOf(0)
     private var panelAnimationToken by mutableIntStateOf(0)
     private var panelDismissAnimating by mutableStateOf(false)
@@ -350,6 +377,13 @@ class TaskControlPanelGlobalOverlay(
         clickPickerY = 0f
         panelMode = PanelMode.NORMAL
         resetRunningPanelState()
+        resetCurrentRunSession()
+        runtimeReportHistoryTaskId = null
+        runtimeReportHistoryTaskName = ""
+        runtimeReportDetail = null
+        runtimeReportDetailMessage = ""
+        runtimeReportHistory = loadRuntimeReportHistory()
+        runtimeReportHistoryMessage = ""
         recordingPaused = false
         replayingGesture = false
         recordedGestures.clear()
@@ -569,6 +603,7 @@ class TaskControlPanelGlobalOverlay(
         replayingGesture = false
         panelMode = PanelMode.NORMAL
         resetRunningPanelState()
+        resetCurrentRunSession()
         recordingSaveDialogVisible = false
         recordingSaveTaskName = ""
         startTaskConfirmDialogVisible = false
@@ -777,6 +812,186 @@ class TaskControlPanelGlobalOverlay(
         }
     }
 
+    private fun hasCurrentRunSession(): Boolean {
+        return currentRunStartedAtEpochMs > 0L || currentRunEvents.isNotEmpty()
+    }
+
+    private suspend fun loadRuntimeReportHistory(
+        taskId: String? = runtimeReportHistoryTaskId,
+    ): List<RuntimeRunReportSummary> {
+        return withContext(Dispatchers.IO) {
+            runtimeRunReportRepository.listLatestSummaries(
+                limit = RUNTIME_REPORT_HISTORY_LIMIT,
+                taskId = taskId,
+            )
+        }
+    }
+
+    private fun refreshRuntimeReportHistory(
+        message: String? = null,
+        withCount: Boolean = false,
+    ) {
+        val filterTaskId = runtimeReportHistoryTaskId
+        scope.launch {
+            val history = loadRuntimeReportHistory(taskId = filterTaskId)
+            if (runtimeReportHistoryTaskId != filterTaskId) {
+                return@launch
+            }
+            runtimeReportHistory = history
+            if (message != null) {
+                runtimeReportHistoryMessage = if (withCount) {
+                    "$message（共${history.size}条）"
+                } else {
+                    message
+                }
+            }
+            touchUi()
+        }
+    }
+
+    private fun deleteRuntimeReport(reportId: String) {
+        val filterTaskId = runtimeReportHistoryTaskId
+        scope.launch {
+            val deleted = withContext(Dispatchers.IO) {
+                runtimeRunReportRepository.deleteByReportId(reportId)
+            }
+            if (!deleted) {
+                runtimeReportHistoryMessage = "删除失败或记录不存在"
+                touchUi()
+                return@launch
+            }
+            val history = loadRuntimeReportHistory(taskId = filterTaskId)
+            if (runtimeReportHistoryTaskId != filterTaskId) {
+                return@launch
+            }
+            runtimeReportHistory = history
+            runtimeReportHistoryMessage = "已删除历史记录（剩余${history.size}条）"
+            if (runtimeReportDetail?.reportId == reportId) {
+                runtimeReportDetail = null
+                runtimeReportDetailMessage = "当前详情已删除"
+                settingsRoute = SettingsRoute.ReportHistory
+            }
+            touchUi()
+        }
+    }
+
+    private fun openReportHistoryOverlay(
+        taskId: String? = null,
+        taskName: String? = null,
+    ) {
+        runtimeReportHistoryTaskId = taskId
+        runtimeReportHistoryTaskName = taskName?.ifBlank { null }
+            ?: tasks.firstOrNull { it.taskId == taskId }?.name
+            ?: ""
+        runtimeReportDetail = null
+        runtimeReportDetailMessage = ""
+        runtimeReportHistoryMessage = ""
+        refreshRuntimeReportHistory()
+        if (settingsVisible) {
+            settingsRoute = SettingsRoute.ReportHistory
+            touchUi()
+            return
+        }
+        if (recordingSaveDialogVisible || startTaskConfirmDialogVisible || panelMode == PanelMode.RECORDING) {
+            return
+        }
+        panelNeedsEntryAnimation = false
+        settingsVisible = true
+        settingsDismissAnimating = false
+        settingsSheetVisible = false
+        settingsRoute = SettingsRoute.ReportHistory
+        settingsTask = null
+        settingsEditorStore = null
+        pendingSettingsOverlayRemoval = false
+        ensureSettingsOverlayView()
+        touchUi()
+        scope.launch {
+            delay(16)
+            settingsSheetVisible = true
+            touchUi()
+        }
+    }
+
+    private fun openTaskReportHistoryOverlay(taskId: String) {
+        val task = tasks.firstOrNull { it.taskId == taskId }
+        openReportHistoryOverlay(
+            taskId = taskId,
+            taskName = task?.name,
+        )
+    }
+
+    private fun openRuntimeReportDetail(reportId: String) {
+        runtimeReportDetail = null
+        runtimeReportDetailMessage = ""
+        scope.launch {
+            val detail = withContext(Dispatchers.IO) {
+                runtimeRunReportRepository.findDetailByReportId(reportId)
+            }
+            if (detail == null) {
+                runtimeReportDetailMessage = "历史记录不存在或已删除"
+                touchUi()
+                return@launch
+            }
+            runtimeReportDetail = detail
+            settingsRoute = SettingsRoute.ReportHistoryDetail(reportId = reportId)
+            touchUi()
+        }
+    }
+
+    private fun openAdjacentRuntimeReportDetail(direction: Int) {
+        val currentReportId = runtimeReportDetail?.reportId
+            ?: (settingsRoute as? SettingsRoute.ReportHistoryDetail)?.reportId
+            ?: return
+        val currentIndex = runtimeReportHistory.indexOfFirst { it.reportId == currentReportId }
+        if (currentIndex < 0) {
+            return
+        }
+        val targetIndex = currentIndex + direction
+        if (targetIndex !in runtimeReportHistory.indices) {
+            return
+        }
+        openRuntimeReportDetail(runtimeReportHistory[targetIndex].reportId)
+    }
+
+    private fun openPrevRuntimeReportDetail() {
+        openAdjacentRuntimeReportDetail(direction = -1)
+    }
+
+    private fun openNextRuntimeReportDetail() {
+        openAdjacentRuntimeReportDetail(direction = 1)
+    }
+
+    private fun openRunHistoryOverlay() {
+        if (!hasCurrentRunSession()) {
+            statusText = "暂无本次执行记录"
+            touchUi()
+            return
+        }
+        if (settingsVisible) {
+            settingsRoute = SettingsRoute.RunHistory
+            touchUi()
+            return
+        }
+        if (recordingSaveDialogVisible || startTaskConfirmDialogVisible || panelMode == PanelMode.RECORDING) {
+            return
+        }
+        panelNeedsEntryAnimation = false
+        settingsVisible = true
+        settingsDismissAnimating = false
+        settingsSheetVisible = false
+        settingsRoute = SettingsRoute.RunHistory
+        settingsTask = null
+        settingsEditorStore = null
+        pendingSettingsOverlayRemoval = false
+        ensureSettingsOverlayView()
+        touchUi()
+        scope.launch {
+            delay(16)
+            settingsSheetVisible = true
+            touchUi()
+        }
+    }
+
     private fun closeSettingsPanel(afterClosed: (() -> Unit)? = null) {
         if (!settingsVisible || settingsDismissAnimating) {
             return
@@ -818,6 +1033,21 @@ class TaskControlPanelGlobalOverlay(
             SettingsRoute.TaskList -> closeSettingsPanel()
             SettingsRoute.ActionList -> {
                 settingsRoute = SettingsRoute.TaskList
+                touchUi()
+            }
+
+            SettingsRoute.RunHistory -> {
+                settingsRoute = SettingsRoute.TaskList
+                touchUi()
+            }
+
+            SettingsRoute.ReportHistory -> {
+                settingsRoute = SettingsRoute.TaskList
+                touchUi()
+            }
+
+            is SettingsRoute.ReportHistoryDetail -> {
+                settingsRoute = SettingsRoute.ReportHistory
                 touchUi()
             }
 
@@ -1054,13 +1284,30 @@ class TaskControlPanelGlobalOverlay(
                                             )
                                         },
                                     )
-                                    Text(
-                                        text = "已执行 $runningStepCount 步",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(
+                                            text = "已执行 $runningStepCount 步",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                        CircleActionIconButton(
+                                            enabled = hasCurrentRunSession(),
+                                            onClick = { openRunHistoryOverlay() },
+                                            icon = { tint ->
+                                                Icon(
+                                                    imageVector = Icons.Rounded.MoreHoriz,
+                                                    contentDescription = "本次执行历史",
+                                                    tint = tint,
+                                                    modifier = Modifier.size(16.dp),
+                                                )
+                                            },
+                                        )
+                                    }
                                 }
                                 Text(
                                     text = "任务：${runningTaskName.ifBlank { "未命名任务" }}",
@@ -1729,9 +1976,33 @@ class TaskControlPanelGlobalOverlay(
 
     @Composable
     private fun SettingsTaskListLayer(modifier: Modifier = Modifier) {
+        val headerActions = buildList {
+            add(
+                SharedOverlayAction(
+                    text = "历史记录",
+                    style = SharedOverlayButtonStyle.TONAL,
+                    onClick = {
+                        openReportHistoryOverlay()
+                    },
+                ),
+            )
+            if (hasCurrentRunSession()) {
+                add(
+                    SharedOverlayAction(
+                        text = "本次执行历史",
+                        style = SharedOverlayButtonStyle.TONAL,
+                        onClick = {
+                            settingsRoute = SettingsRoute.RunHistory
+                            touchUi()
+                        },
+                    ),
+                )
+            }
+        }
         SharedOverlayDialogScaffold(
             title = "任务设置",
             showBack = false,
+            headerActions = headerActions,
             modifier = modifier,
             onBack = {},
             onClose = { closeSettingsPanel() },
@@ -1742,17 +2013,37 @@ class TaskControlPanelGlobalOverlay(
 
     @Composable
     private fun SettingsActionListLayer(modifier: Modifier = Modifier) {
+        val route = settingsRoute
+        val isRunHistory = route == SettingsRoute.RunHistory
+        val isReportHistoryList = route == SettingsRoute.ReportHistory
+        val isReportHistoryDetail = route is SettingsRoute.ReportHistoryDetail
         SharedOverlayDialogScaffold(
-            title = "动作列表",
+            title = when {
+                isRunHistory -> "本次执行历史"
+                isReportHistoryList -> "历史记录"
+                isReportHistoryDetail -> "历史记录详情"
+                else -> "动作列表"
+            },
             showBack = true,
             modifier = modifier,
             onBack = {
-                settingsRoute = SettingsRoute.TaskList
+                settingsRoute = when (route) {
+                    is SettingsRoute.ReportHistoryDetail -> SettingsRoute.ReportHistory
+                    else -> SettingsRoute.TaskList
+                }
                 touchUi()
             },
             onClose = { closeSettingsPanel() },
         ) {
-            SettingsActionListPage()
+            if (isRunHistory) {
+                SettingsRunHistoryPage()
+            } else if (isReportHistoryList) {
+                SettingsReportHistoryPage()
+            } else if (isReportHistoryDetail) {
+                SettingsReportHistoryDetailPage()
+            } else {
+                SettingsActionListPage()
+            }
         }
     }
 
@@ -1780,6 +2071,7 @@ class TaskControlPanelGlobalOverlay(
             statusText = statusText,
             onCreateTask = ::createTaskFromSettings,
             onTaskCardClick = ::openTaskEditorOverlay,
+            onTaskHistory = ::openTaskReportHistoryOverlay,
             onRenameTask = ::renameTaskFromSettings,
             onDuplicateTask = ::duplicateTaskFromSettings,
             onDeleteTask = ::deleteTaskFromSettings,
@@ -1860,6 +2152,48 @@ class TaskControlPanelGlobalOverlay(
             currentScreenSizePx = ::currentScreenSizePx,
             mutateSettingsEditor = ::mutateSettingsEditor,
             openClickPositionPicker = ::openClickPositionPicker,
+        )
+    }
+
+    @Composable
+    private fun SettingsRunHistoryPage() {
+        val snapshot = currentRunHistorySnapshot()
+        TaskControlRunHistoryPage(snapshot = snapshot)
+    }
+
+    @Composable
+    private fun SettingsReportHistoryPage() {
+        val taskScopeLabel = if (runtimeReportHistoryTaskId.isNullOrBlank()) {
+            null
+        } else {
+            "仅显示任务：${runtimeReportHistoryTaskName.ifBlank { runtimeReportHistoryTaskId.orEmpty() }}"
+        }
+        TaskControlRuntimeReportHistoryPage(
+            history = runtimeReportHistory,
+            taskScopeLabel = taskScopeLabel,
+            statusMessage = runtimeReportHistoryMessage,
+            onRefresh = {
+                refreshRuntimeReportHistory(message = "已刷新", withCount = true)
+            },
+            onOpenDetail = ::openRuntimeReportDetail,
+            onDelete = ::deleteRuntimeReport,
+        )
+    }
+
+    @Composable
+    private fun SettingsReportHistoryDetailPage() {
+        val currentReportId = runtimeReportDetail?.reportId
+            ?: (settingsRoute as? SettingsRoute.ReportHistoryDetail)?.reportId
+        val currentIndex = runtimeReportHistory.indexOfFirst { it.reportId == currentReportId }
+        val canOpenPrev = currentIndex > 0
+        val canOpenNext = currentIndex in 0 until runtimeReportHistory.lastIndex
+        TaskControlRuntimeReportDetailPage(
+            detail = runtimeReportDetail,
+            statusMessage = runtimeReportDetailMessage,
+            canOpenPrev = canOpenPrev,
+            canOpenNext = canOpenNext,
+            onOpenPrev = ::openPrevRuntimeReportDetail,
+            onOpenNext = ::openNextRuntimeReportDetail,
         )
     }
 
@@ -1971,6 +2305,7 @@ class TaskControlPanelGlobalOverlay(
         runningCurrentNodeId = "-"
         runningLastMessage = "等待执行..."
         runningLastErrorCode = ""
+        beginCurrentRunSession(task)
     }
 
     private fun resetRunningPanelState() {
@@ -1982,7 +2317,85 @@ class TaskControlPanelGlobalOverlay(
         runningLastErrorCode = ""
     }
 
+    private fun beginCurrentRunSession(task: TaskRecord) {
+        currentRunTraceId = ""
+        currentRunTaskId = task.taskId
+        currentRunTaskName = task.name
+        currentRunStatus = "RUNNING"
+        currentRunStepCount = 0
+        currentRunStartedAtEpochMs = System.currentTimeMillis()
+        currentRunFinishedAtEpochMs = 0L
+        currentRunMessage = "running"
+        currentRunErrorCode = ""
+        currentRunEvents = emptyList()
+    }
+
+    private fun resetCurrentRunSession() {
+        currentRunTraceId = ""
+        currentRunTaskId = ""
+        currentRunTaskName = ""
+        currentRunStatus = ""
+        currentRunStepCount = 0
+        currentRunStartedAtEpochMs = 0L
+        currentRunFinishedAtEpochMs = 0L
+        currentRunMessage = ""
+        currentRunErrorCode = ""
+        currentRunEvents = emptyList()
+    }
+
+    private fun updateCurrentRunSessionFromTrace(event: RuntimeTraceEvent) {
+        if (currentRunTraceId.isBlank()) {
+            currentRunTraceId = event.traceId
+        }
+        currentRunStepCount = maxOf(currentRunStepCount, event.step + 1)
+        currentRunEvents = (currentRunEvents + event).takeLast(600)
+    }
+
+    private fun finalizeCurrentRunSession(
+        status: String,
+        message: String,
+        errorCode: String,
+        stepCount: Int,
+        finishedAtEpochMs: Long = System.currentTimeMillis(),
+    ) {
+        currentRunStatus = status
+        currentRunMessage = message
+        currentRunErrorCode = errorCode
+        currentRunStepCount = maxOf(currentRunStepCount, stepCount)
+        currentRunFinishedAtEpochMs = finishedAtEpochMs.coerceAtLeast(currentRunStartedAtEpochMs)
+    }
+
+    private fun currentRunHistorySnapshot(): TaskControlRunHistorySnapshot? {
+        if (!hasCurrentRunSession()) {
+            return null
+        }
+        val taskName = currentRunTaskName.ifBlank { runningTaskName }
+        val status = currentRunStatus.ifBlank {
+            if (running) "RUNNING" else "-"
+        }
+        val message = currentRunMessage.ifBlank {
+            runningLastMessage
+        }
+        val errorCode = currentRunErrorCode.ifBlank {
+            runningLastErrorCode
+        }
+        val stepCount = maxOf(currentRunStepCount, runningStepCount)
+        return TaskControlRunHistorySnapshot(
+            traceId = currentRunTraceId,
+            taskId = currentRunTaskId,
+            taskName = taskName,
+            status = status,
+            stepCount = stepCount,
+            startedAtEpochMs = currentRunStartedAtEpochMs,
+            finishedAtEpochMs = currentRunFinishedAtEpochMs.takeIf { it > 0L },
+            message = message,
+            errorCode = errorCode,
+            events = currentRunEvents,
+        )
+    }
+
     private fun updateRunningPanelFromTrace(event: RuntimeTraceEvent) {
+        updateCurrentRunSessionFromTrace(event)
         runningCurrentFlowId = event.flowId
         runningCurrentNodeId = event.nodeId
         runningStepCount = maxOf(runningStepCount, event.step + 1)
@@ -2019,6 +2432,15 @@ class TaskControlPanelGlobalOverlay(
             RuntimeExecutionStatus.STOPPED -> "已停止"
             RuntimeExecutionStatus.FAILED -> result.message?.takeIf { it.isNotBlank() } ?: "执行失败"
         }
+        if (currentRunTraceId.isBlank()) {
+            currentRunTraceId = result.traceId
+        }
+        finalizeCurrentRunSession(
+            status = result.status.name,
+            message = result.message ?: runningLastMessage,
+            errorCode = runningLastErrorCode,
+            stepCount = result.stepCount,
+        )
     }
 
     private fun startLastTask() {
@@ -2094,17 +2516,30 @@ class TaskControlPanelGlobalOverlay(
                         summary = summary,
                     )
                 }
+                refreshRuntimeReportHistory()
                 loadTasks()
                 statusText = summary
                 touchUi()
             } catch (_: CancellationException) {
                 runningLastMessage = "用户已停止"
                 runningLastErrorCode = ""
+                finalizeCurrentRunSession(
+                    status = RuntimeExecutionStatus.STOPPED.name,
+                    message = "user_requested_stop",
+                    errorCode = "",
+                    stepCount = runningStepCount,
+                )
                 statusText = "任务已停止"
                 touchUi()
             } catch (error: Throwable) {
                 runningLastMessage = "运行异常"
                 runningLastErrorCode = ""
+                finalizeCurrentRunSession(
+                    status = RuntimeExecutionStatus.FAILED.name,
+                    message = error.message ?: "unknown",
+                    errorCode = "",
+                    stepCount = runningStepCount,
+                )
                 statusText = "运行失败: ${error.message ?: "unknown"}"
                 touchUi()
             } finally {

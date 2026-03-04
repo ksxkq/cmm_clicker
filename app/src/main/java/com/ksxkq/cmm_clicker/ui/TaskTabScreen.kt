@@ -73,6 +73,7 @@ fun TaskLibraryPanel(
     taskOperationMessage: String,
     onCreateTask: (String) -> Unit,
     onTaskCardClick: (String) -> Unit,
+    onTaskHistory: (String) -> Unit,
     onRenameTask: (String, String) -> Unit,
     onDuplicateTask: (String) -> Unit,
     onDeleteTask: (String) -> Unit,
@@ -249,6 +250,13 @@ fun TaskLibraryPanel(
                                             menuTaskId = null
                                             renameTaskId = task.taskId
                                             renameTaskName = task.name
+                                        },
+                                    )
+                                    AppDropdownMenuItem(
+                                        text = "历史记录",
+                                        onClick = {
+                                            menuTaskId = null
+                                            onTaskHistory(task.taskId)
                                         },
                                     )
                                     AppDropdownMenuItem(

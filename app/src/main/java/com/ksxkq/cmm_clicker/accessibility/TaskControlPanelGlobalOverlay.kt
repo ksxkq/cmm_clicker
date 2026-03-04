@@ -18,10 +18,14 @@ import android.widget.TextView
 import androidx.compose.animation.AnimatedVisibility as AnimatedVisibilityBox
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -53,9 +57,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.FiberManualRecord
-import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.rounded.Close
@@ -318,6 +322,7 @@ class TaskControlPanelGlobalOverlay(
     private var settingsTask by mutableStateOf<TaskRecord?>(null)
     private var settingsEditorStore by mutableStateOf<TaskGraphEditorStore?>(null)
     private var running by mutableStateOf(false)
+    private var runningPaused by mutableStateOf(false)
     private var recording by mutableStateOf(false)
     private var recordingPaused by mutableStateOf(false)
     private var replayingGesture by mutableStateOf(false)
@@ -372,6 +377,8 @@ class TaskControlPanelGlobalOverlay(
     private var selectedTaskId by mutableStateOf(prefs.getString(KEY_SELECTED_TASK_ID, null))
     private var lastStartedTaskId by mutableStateOf(prefs.getString(KEY_LAST_STARTED_TASK_ID, null))
     private val recordedGestures = mutableListOf<RecordedGesture>()
+    @Volatile
+    private var runningPauseRequested = false
 
     fun show() {
         scope.launch {
@@ -573,6 +580,11 @@ class TaskControlPanelGlobalOverlay(
 
     private fun hasPanelHideReason(): Boolean = panelHideReasons.isNotEmpty()
 
+    private fun isRunningMiniActive(): Boolean {
+        return panelDisplayMode == PanelDisplayMode.MINI &&
+            panelHideReasons[PanelHideReason.RUNNING_TEMP] == true
+    }
+
     private fun setSettingsOverlayInteractionEnabled(enabled: Boolean) {
         if (settingsOverlayInteractionEnabled == enabled) {
             return
@@ -652,6 +664,32 @@ class TaskControlPanelGlobalOverlay(
             settingsSheetVisible = true
             touchUi()
         }
+    }
+
+    private fun minimizeRunningPanel() {
+        if (!running || panelMode != PanelMode.RUNNING) {
+            return
+        }
+        setPanelHideReason(PanelHideReason.RUNNING_TEMP, hidden = true)
+        setPanelDisplayMode(
+            mode = PanelDisplayMode.MINI,
+            reason = "minimize_running_panel",
+        )
+    }
+
+    private fun restorePanelFromMini() {
+        if (panelDisplayMode != PanelDisplayMode.MINI) {
+            return
+        }
+        if (panelHideReasons[PanelHideReason.RUNNING_TEMP] == true) {
+            setPanelHideReason(PanelHideReason.RUNNING_TEMP, hidden = false)
+            setPanelDisplayMode(
+                mode = PanelDisplayMode.FULL,
+                reason = "restore_running_panel",
+            )
+            return
+        }
+        restoreSettingsOverlayFromMini()
     }
 
     private fun startThemeSync() {
@@ -1529,6 +1567,10 @@ class TaskControlPanelGlobalOverlay(
             panelEntered = true
             panelNeedsEntryAnimation = false
         }
+        val runningMiniActive = isRunningMiniActive()
+        val miniBlockedByOtherHideReasons = panelHideReasons.keys.any {
+            it != PanelHideReason.RUNNING_TEMP
+        }
         val fullPanelVisible = panelEntered &&
             !panelDismissAnimating &&
             panelDisplayMode == PanelDisplayMode.FULL &&
@@ -1538,7 +1580,7 @@ class TaskControlPanelGlobalOverlay(
         val miniPanelVisible = panelEntered &&
             !panelDismissAnimating &&
             panelDisplayMode == PanelDisplayMode.MINI &&
-            !hasPanelHideReason()
+            !miniBlockedByOtherHideReasons
         val panelVisible = fullPanelVisible || miniPanelVisible
         val panelAlpha by animateFloatAsState(
             targetValue = if (panelVisible) 1f else 0f,
@@ -1573,7 +1615,7 @@ class TaskControlPanelGlobalOverlay(
             modifier = Modifier
                 .width(
                     when (panelDisplayMode) {
-                        PanelDisplayMode.MINI -> 150.dp
+                        PanelDisplayMode.MINI -> if (runningMiniActive) 216.dp else 150.dp
                         PanelDisplayMode.FULL -> when (panelMode) {
                             PanelMode.RECORDING -> 222.dp
                             PanelMode.RUNNING -> 264.dp
@@ -1598,28 +1640,90 @@ class TaskControlPanelGlobalOverlay(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 if (panelDisplayMode == PanelDisplayMode.MINI) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        OutlinedButton(
-                            modifier = Modifier.weight(1f),
-                            onClick = { restoreSettingsOverlayFromMini() },
-                        ) {
-                            Text("恢复")
-                        }
-                        CircleActionIconButton(
-                            onClick = { dismissPanelWithAnimation() },
-                            icon = { tint ->
-                                Icon(
-                                    imageVector = Icons.Rounded.Close,
-                                    contentDescription = "移除面板",
-                                    tint = tint,
-                                    modifier = Modifier.size(18.dp),
-                                )
-                            },
+                    if (runningMiniActive) {
+                        val runningMiniTransition = rememberInfiniteTransition(
+                            label = "running_mini_indicator",
                         )
+                        val runningMiniRotation by runningMiniTransition.animateFloat(
+                            initialValue = 0f,
+                            targetValue = 360f,
+                            animationSpec = infiniteRepeatable(
+                                animation = tween(durationMillis = 1000, easing = LinearEasing),
+                            ),
+                            label = "running_mini_rotation",
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                imageVector = if (runningPaused) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                contentDescription = if (runningPaused) "已暂停" else "运行中",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier
+                                    .size(18.dp)
+                                    .graphicsLayer {
+                                        if (!runningPaused) {
+                                            rotationZ = runningMiniRotation
+                                        }
+                                    },
+                            )
+                            Text(
+                                text = if (runningPaused) {
+                                    "已暂停 $runningStepCount 步"
+                                } else {
+                                    "运行中 $runningStepCount 步"
+                                },
+                                modifier = Modifier.weight(1f),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            OutlinedButton(
+                                modifier = Modifier.weight(1f),
+                                onClick = { restorePanelFromMini() },
+                            ) {
+                                Text("恢复")
+                            }
+                            OutlinedButton(
+                                modifier = Modifier.weight(1f),
+                                onClick = { stopRunningTask() },
+                            ) {
+                                Text("停止")
+                            }
+                        }
+                    } else {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            OutlinedButton(
+                                modifier = Modifier.weight(1f),
+                                onClick = { restorePanelFromMini() },
+                            ) {
+                                Text("恢复")
+                            }
+                            CircleActionIconButton(
+                                onClick = { dismissPanelWithAnimation() },
+                                icon = { tint ->
+                                    Icon(
+                                        imageVector = Icons.Rounded.Close,
+                                        contentDescription = "移除面板",
+                                        tint = tint,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                },
+                            )
+                        }
                     }
                 } else {
                     Crossfade(
@@ -1700,43 +1804,58 @@ class TaskControlPanelGlobalOverlay(
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
-                                    CircleActionIconButton(
-                                        enabled = running,
-                                        filled = true,
-                                        onClick = { stopRunningTask() },
-                                        icon = { tint ->
-                                            Icon(
-                                                imageVector = Icons.Rounded.Stop,
-                                                contentDescription = "停止执行",
-                                                tint = tint,
-                                                modifier = Modifier.size(18.dp),
-                                            )
-                                        },
-                                    )
                                     Row(
+                                        modifier = Modifier.weight(1f),
                                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                                         verticalAlignment = Alignment.CenterVertically,
                                     ) {
+                                        CircleActionIconButton(
+                                            enabled = running,
+                                            filled = true,
+                                            onClick = { stopRunningTask() },
+                                            icon = { tint ->
+                                                Icon(
+                                                    imageVector = Icons.Rounded.Stop,
+                                                    contentDescription = "停止执行",
+                                                    tint = tint,
+                                                    modifier = Modifier.size(18.dp),
+                                                )
+                                            },
+                                        )
+                                        CircleActionIconButton(
+                                            enabled = running,
+                                            filled = runningPaused,
+                                            onClick = { toggleRunningPause() },
+                                            icon = { tint ->
+                                                Icon(
+                                                    imageVector = if (runningPaused) Icons.Rounded.PlayArrow else Icons.Rounded.Pause,
+                                                    contentDescription = if (runningPaused) "继续执行" else "暂停任务",
+                                                    tint = tint,
+                                                    modifier = Modifier.size(16.dp),
+                                                )
+                                            },
+                                        )
                                         Text(
+                                            modifier = Modifier.weight(1f),
                                             text = "已执行 $runningStepCount 步",
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis,
                                         )
-                                        CircleActionIconButton(
-                                            enabled = hasCurrentRunSession(),
-                                            onClick = { openRunHistoryOverlay() },
-                                            icon = { tint ->
-                                                Icon(
-                                                    imageVector = Icons.Rounded.MoreHoriz,
-                                                    contentDescription = "本次执行历史",
-                                                    tint = tint,
-                                                    modifier = Modifier.size(16.dp),
-                                                )
-                                            },
-                                        )
                                     }
+                                    CircleActionIconButton(
+                                        enabled = running,
+                                        onClick = { minimizeRunningPanel() },
+                                        icon = { tint ->
+                                            Icon(
+                                                imageVector = Icons.Rounded.Remove,
+                                                contentDescription = "最小化运行面板",
+                                                tint = tint,
+                                                modifier = Modifier.size(16.dp),
+                                            )
+                                        },
+                                    )
                                 }
                                 Text(
                                     text = "任务：${runningTaskName.ifBlank { "未命名任务" }}",
@@ -2759,6 +2878,13 @@ class TaskControlPanelGlobalOverlay(
 
     private fun beginRunningPanel(task: TaskRecord) {
         panelMode = PanelMode.RUNNING
+        setPanelHideReason(PanelHideReason.RUNNING_TEMP, hidden = false)
+        setPanelDisplayMode(
+            mode = PanelDisplayMode.FULL,
+            reason = "begin_running_panel",
+        )
+        runningPaused = false
+        runningPauseRequested = false
         runningTaskName = task.name.ifBlank { "未命名任务" }
         runningStepCount = 0
         runningCurrentFlowId = "-"
@@ -2769,6 +2895,9 @@ class TaskControlPanelGlobalOverlay(
     }
 
     private fun resetRunningPanelState() {
+        setPanelHideReason(PanelHideReason.RUNNING_TEMP, hidden = false)
+        runningPaused = false
+        runningPauseRequested = false
         runningTaskName = ""
         runningStepCount = 0
         runningCurrentFlowId = ""
@@ -2903,6 +3032,22 @@ class TaskControlPanelGlobalOverlay(
         )
     }
 
+    private fun toggleRunningPause() {
+        if (!running || runTaskJob?.isActive != true) {
+            return
+        }
+        val paused = !runningPaused
+        runningPaused = paused
+        runningPauseRequested = paused
+        runningLastMessage = if (paused) "任务已暂停" else "任务继续执行"
+        statusText = if (paused) "运行已暂停" else "运行已继续"
+        recordPanelVisibilityEvent(
+            event = "running_pause_toggle",
+            reason = "paused=$paused",
+        )
+        touchUi()
+    }
+
     private fun startLastTask(preferredTaskId: String? = null) {
         if (running || runTaskJob?.isActive == true) {
             return
@@ -2945,6 +3090,8 @@ class TaskControlPanelGlobalOverlay(
                             dryRun = false,
                             maxSteps = 200,
                             stopOnValidationError = true,
+                            isPaused = { runningPauseRequested },
+                            pausePollIntervalMs = 120L,
                         ),
                     ).execute(
                         bundle = task.bundle,
@@ -2981,6 +3128,8 @@ class TaskControlPanelGlobalOverlay(
                 statusText = summary
                 touchUi()
             } catch (_: CancellationException) {
+                runningPaused = false
+                runningPauseRequested = false
                 runningLastMessage = "用户已停止"
                 runningLastErrorCode = ""
                 finalizeCurrentRunSession(
@@ -2992,6 +3141,8 @@ class TaskControlPanelGlobalOverlay(
                 statusText = "任务已停止"
                 touchUi()
             } catch (error: Throwable) {
+                runningPaused = false
+                runningPauseRequested = false
                 runningLastMessage = "运行异常"
                 runningLastErrorCode = ""
                 finalizeCurrentRunSession(
@@ -3004,6 +3155,15 @@ class TaskControlPanelGlobalOverlay(
                 touchUi()
             } finally {
                 running = false
+                runningPaused = false
+                runningPauseRequested = false
+                if (panelHideReasons[PanelHideReason.RUNNING_TEMP] == true) {
+                    setPanelHideReason(PanelHideReason.RUNNING_TEMP, hidden = false)
+                    setPanelDisplayMode(
+                        mode = PanelDisplayMode.FULL,
+                        reason = "running_finished_auto_restore",
+                    )
+                }
                 if (panelMode == PanelMode.RUNNING) {
                     panelMode = PanelMode.NORMAL
                 }

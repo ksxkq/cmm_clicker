@@ -62,6 +62,7 @@ class FlowRuntimeEngine(
 
         var pointer: NodePointer? = NodePointer(entryFlow.flowId, entryFlow.entryNodeId)
         while (pointer != null && runtimeContext.step < options.maxSteps) {
+            waitIfPaused()
             runtimeContext.currentPointer = pointer
             val flow = normalizedBundle.findFlow(pointer.flowId)
                 ?: return fail(
@@ -222,7 +223,7 @@ class FlowRuntimeEngine(
                         fallback = 0L,
                     ).coerceAtLeast(0L)
                     if (postDelayMs > 0L && !runtimeContext.dryRun) {
-                        delay(postDelayMs)
+                        delayWithPause(postDelayMs)
                     }
                     traceCollector.add(
                         RuntimeTraceEvent(
@@ -313,6 +314,28 @@ class FlowRuntimeEngine(
             validationIssues = validationIssues,
             traceEvents = traceCollector.snapshot(),
         )
+    }
+
+    private suspend fun waitIfPaused() {
+        val checker = options.isPaused ?: return
+        val pollIntervalMs = options.pausePollIntervalMs.coerceIn(16L, 1000L)
+        while (checker.invoke()) {
+            delay(pollIntervalMs)
+        }
+    }
+
+    private suspend fun delayWithPause(durationMs: Long) {
+        var remaining = durationMs.coerceAtLeast(0L)
+        if (remaining == 0L) {
+            return
+        }
+        val slice = options.pausePollIntervalMs.coerceIn(16L, 1000L)
+        while (remaining > 0L) {
+            waitIfPaused()
+            val chunk = minOf(remaining, slice)
+            delay(chunk)
+            remaining -= chunk
+        }
     }
 
     private fun normalizeBundleSequentialAlwaysEdges(bundle: TaskBundle): TaskBundle {

@@ -9,6 +9,8 @@ data class RuntimeEngineOptions(
     val maxSteps: Int = 1000,
     val dryRun: Boolean = false,
     val stopOnValidationError: Boolean = true,
+    val isPaused: (() -> Boolean)? = null,
+    val pausePollIntervalMs: Long = 120L,
 )
 
 data class RuntimeContext(

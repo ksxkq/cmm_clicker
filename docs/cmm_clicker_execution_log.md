@@ -551,6 +551,14 @@
 482. 原因链路日志收敛：`setPanelDisplayMode`、`setPanelHideReason`、`setPendingSettingsOverlayRemoval`、`removeSettingsOverlay`、`removeOverlay`、`settings modal show/dismiss/action`、`settings open/close/minimize/restore` 全部接入 `panel_trace` 日志。
 483. 移除阻塞可见化：`removeSettingsOverlayIfIdle` 增加阻塞签名日志（并去重），可直接看到为何未满足移除条件（如 `settingsVisible` / `recordingDialog` / `settingsModal`）。
 484. 稳定性验证：以上“隐藏/移除原因可回溯”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+485. 运行中最小化能力落地：新增 `RUNNING_TEMP` 隐藏原因驱动的 `RUNNING_MINI` 视图语义；运行态支持“最小化运行面板”，最小化后任务持续执行且保留运行上下文。
+486. 运行中 MINI 交互与动效：`RUNNING_MINI` 面板新增“运行中”旋转图标动效与【恢复】【停止】快捷操作；仅当唯一隐藏原因为 `RUNNING_TEMP` 时显示 MINI，避免与其它隐藏原因冲突。
+487. 运行结束回收一致性：任务结束时若处于 `RUNNING_TEMP`，自动清理隐藏原因并恢复全量面板，避免 MINI 残留；并再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+488. RUNNING 面板交互收敛：移除运行态卡片内【本次执行历史】入口，保留“停止 + 最小化 + 暂停/继续”核心控制，避免运行中误触进入历史页打断操作路径。
+489. 运行时暂停能力接入：`RuntimeEngineOptions` 新增 `isPaused/pausePollIntervalMs`，`FlowRuntimeEngine` 在节点边界与 `postDelayMs` 阶段轮询暂停状态；浮窗运行态新增【暂停/继续】按钮并实时更新状态文案。
+490. 稳定性验证：以上“运行态去历史入口 + 暂停控制”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+491. RUNNING 面板按钮位置优化：暂停按钮移动到停止按钮右侧；最小化按钮移动到运行面板右上角，保留“左侧执行控制、右上角收起”一致布局语义。
+492. 稳定性验证：以上“运行态按钮位置调整”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
 
 ## 3. 正在进行
 

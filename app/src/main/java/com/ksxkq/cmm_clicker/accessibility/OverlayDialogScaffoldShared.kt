@@ -63,6 +63,7 @@ internal fun SharedOverlayDialogButton(
 internal fun SharedOverlayDialogScaffold(
     title: String,
     showBack: Boolean,
+    showMinimize: Boolean = false,
     breadcrumbs: List<SharedOverlayBreadcrumb> = emptyList(),
     onBreadcrumbNavigate: ((Int) -> Unit)? = null,
     modifier: Modifier = Modifier,
@@ -70,6 +71,7 @@ internal fun SharedOverlayDialogScaffold(
     footerActions: List<SharedOverlayAction> = emptyList(),
     onBack: () -> Unit,
     onClose: () -> Unit,
+    onMinimize: (() -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
     val cardShape = RoundedCornerShape(18.dp)
@@ -89,24 +91,19 @@ internal fun SharedOverlayDialogScaffold(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                if (showBack) {
-                    SharedOverlayDialogButton(
-                        text = "返回",
-                        style = SharedOverlayButtonStyle.OUTLINE,
-                        onClick = onBack,
-                    )
-                }
                 Text(
                     text = title,
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.weight(1f),
                     maxLines = 1,
                 )
-                SharedOverlayDialogButton(
-                    text = "关闭",
-                    style = SharedOverlayButtonStyle.OUTLINE,
-                    onClick = onClose,
-                )
+                if (showMinimize) {
+                    SharedOverlayDialogButton(
+                        text = "最小化",
+                        style = SharedOverlayButtonStyle.OUTLINE,
+                        onClick = { onMinimize?.invoke() },
+                    )
+                }
             }
 
             HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f))
@@ -196,14 +193,28 @@ internal fun SharedOverlayDialogScaffold(
                 }
             }
 
-            if (footerActions.isNotEmpty()) {
-                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f))
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 10.dp, vertical = 10.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                SharedOverlayDialogButton(
+                    text = if (showBack) "返回" else "关闭",
+                    style = SharedOverlayButtonStyle.OUTLINE,
+                    onClick = {
+                        if (showBack) {
+                            onBack()
+                        } else {
+                            onClose()
+                        }
+                    },
+                )
+                if (footerActions.isEmpty()) {
+                    Row(modifier = Modifier.weight(1f)) {}
+                } else {
                     footerActions.forEach { action ->
                         SharedOverlayDialogButton(
                             text = action.text,

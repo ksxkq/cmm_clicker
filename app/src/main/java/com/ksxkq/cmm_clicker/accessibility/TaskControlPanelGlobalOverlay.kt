@@ -214,6 +214,17 @@ class TaskControlPanelGlobalOverlay(
         RUNNING,
     }
 
+    private enum class PanelDisplayMode {
+        FULL,
+        MINI,
+    }
+
+    private enum class PanelHideReason {
+        SETTINGS_OPEN,
+        RECORDING_INTERACTION,
+        RUNNING_TEMP,
+    }
+
     private sealed interface SettingsRoute {
         data object TaskList : SettingsRoute
 
@@ -266,6 +277,7 @@ class TaskControlPanelGlobalOverlay(
     private var overlayRecomposerJob: Job? = null
     private var settingsOverlayView: ComposeView? = null
     private var settingsComposeOwner: ControlOverlayComposeOwner? = null
+    private var settingsLayoutParams: WindowManager.LayoutParams? = null
     private var settingsRecomposer: Recomposer? = null
     private var settingsRecomposerJob: Job? = null
     private var themeSyncJob: Job? = null
@@ -296,6 +308,8 @@ class TaskControlPanelGlobalOverlay(
     private var recordingPaused by mutableStateOf(false)
     private var replayingGesture by mutableStateOf(false)
     private var panelMode by mutableStateOf(PanelMode.NORMAL)
+    private var panelDisplayMode by mutableStateOf(PanelDisplayMode.FULL)
+    private val panelHideReasons: SnapshotStateMap<PanelHideReason, Boolean> = mutableStateMapOf()
     private var recordingSaveDialogVisible by mutableStateOf(false)
     private var recordingSaveTaskName by mutableStateOf("")
     private var recordedStepCount by mutableIntStateOf(0)
@@ -332,6 +346,7 @@ class TaskControlPanelGlobalOverlay(
     private var recordingSaveDialogAnimatingOut by mutableStateOf(false)
     private var removeSettingsOverlayAfterRecordingDialogExit = false
     private var pendingSettingsOverlayRemoval = false
+    private var settingsOverlayInteractionEnabled = true
     private var clickPickerVisible by mutableStateOf(false)
     private var clickPickerNodeId by mutableStateOf<String?>(null)
     private var clickPickerX by mutableStateOf(0f)
@@ -390,6 +405,11 @@ class TaskControlPanelGlobalOverlay(
         clickPickerX = 0f
         clickPickerY = 0f
         panelMode = PanelMode.NORMAL
+        panelDisplayMode = PanelDisplayMode.FULL
+        panelHideReasons.clear()
+        if (openSettings) {
+            panelHideReasons[PanelHideReason.SETTINGS_OPEN] = true
+        }
         resetRunningPanelState()
         resetCurrentRunSession()
         runtimeReportHistoryTaskId = null
@@ -431,6 +451,86 @@ class TaskControlPanelGlobalOverlay(
     }
 
     fun isShowing(): Boolean = overlayView != null
+
+    private fun setPanelHideReason(reason: PanelHideReason, hidden: Boolean) {
+        val previous = panelHideReasons[reason] == true
+        if (previous == hidden) {
+            return
+        }
+        if (hidden) {
+            panelHideReasons[reason] = true
+        } else {
+            panelHideReasons.remove(reason)
+        }
+        touchUi()
+    }
+
+    private fun hasPanelHideReason(): Boolean = panelHideReasons.isNotEmpty()
+
+    private fun setSettingsOverlayInteractionEnabled(enabled: Boolean) {
+        if (settingsOverlayInteractionEnabled == enabled) {
+            return
+        }
+        settingsOverlayInteractionEnabled = enabled
+        val view = settingsOverlayView ?: return
+        val params = settingsLayoutParams ?: return
+        val nextFlags = if (enabled) {
+            params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+        } else {
+            params.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        }
+        if (params.flags != nextFlags) {
+            params.flags = nextFlags
+            runCatching { windowManager.updateViewLayout(view, params) }
+                .onFailure { Log.w(TAG, "setSettingsOverlayInteractionEnabled failed: enabled=$enabled", it) }
+        }
+        view.visibility = if (enabled) View.VISIBLE else View.INVISIBLE
+    }
+
+    private fun minimizeSettingsOverlay() {
+        if (!settingsVisible || settingsDismissAnimating) {
+            return
+        }
+        panelDisplayMode = PanelDisplayMode.MINI
+        settingsDismissAnimating = true
+        settingsSheetVisible = false
+        touchUi()
+        scope.launch {
+            delay(200)
+            settingsVisible = false
+            settingsSheetVisible = false
+            settingsDismissAnimating = false
+            setPanelHideReason(PanelHideReason.SETTINGS_OPEN, hidden = false)
+            pendingSettingsOverlayRemoval = false
+            setSettingsOverlayInteractionEnabled(enabled = false)
+            touchUi()
+        }
+    }
+
+    private fun restoreSettingsOverlayFromMini() {
+        if (panelDisplayMode != PanelDisplayMode.MINI) {
+            return
+        }
+        panelDisplayMode = PanelDisplayMode.FULL
+        if (settingsVisible) {
+            setSettingsOverlayInteractionEnabled(enabled = true)
+            touchUi()
+            return
+        }
+        ensureSettingsOverlayView()
+        setSettingsOverlayInteractionEnabled(enabled = true)
+        pendingSettingsOverlayRemoval = false
+        settingsVisible = true
+        settingsDismissAnimating = false
+        settingsSheetVisible = false
+        setPanelHideReason(PanelHideReason.SETTINGS_OPEN, hidden = true)
+        touchUi()
+        scope.launch {
+            delay(16)
+            settingsSheetVisible = true
+            touchUi()
+        }
+    }
 
     private fun startThemeSync() {
         themeSyncJob?.cancel()
@@ -530,6 +630,8 @@ class TaskControlPanelGlobalOverlay(
             windowManager.addView(compose, params)
             settingsOverlayView = compose
             settingsComposeOwner = owner
+            settingsLayoutParams = params
+            settingsOverlayInteractionEnabled = true
             val recomposerContext = AndroidUiDispatcher.CurrentThread
             val recomposer = Recomposer(recomposerContext)
             val recomposerJob = scope.launch(recomposerContext, start = CoroutineStart.UNDISPATCHED) {
@@ -564,6 +666,7 @@ class TaskControlPanelGlobalOverlay(
             runCatching { windowManager.removeView(view) }
         }
         settingsOverlayView = null
+        settingsLayoutParams = null
         settingsRecomposer?.cancel()
         settingsRecomposer = null
         settingsRecomposerJob?.cancel()
@@ -586,6 +689,8 @@ class TaskControlPanelGlobalOverlay(
         clickPickerNodeId = null
         clickPickerX = 0f
         clickPickerY = 0f
+        settingsOverlayInteractionEnabled = true
+        panelHideReasons.remove(PanelHideReason.SETTINGS_OPEN)
     }
 
     private fun removeOverlay() {
@@ -627,6 +732,8 @@ class TaskControlPanelGlobalOverlay(
         recordedGestures.clear()
         recordedStepCount = 0
         stopRecordingTicker(resetElapsed = true)
+        panelDisplayMode = PanelDisplayMode.FULL
+        panelHideReasons.clear()
     }
 
     private fun removeSettingsOverlayIfIdle() {
@@ -771,10 +878,13 @@ class TaskControlPanelGlobalOverlay(
         ) {
             return
         }
+        panelDisplayMode = PanelDisplayMode.FULL
         panelNeedsEntryAnimation = false
         settingsVisible = true
         settingsDismissAnimating = false
         settingsSheetVisible = false
+        setSettingsOverlayInteractionEnabled(enabled = true)
+        setPanelHideReason(PanelHideReason.SETTINGS_OPEN, hidden = true)
         settingsRoute = SettingsRoute.TaskList
         settingsTask = null
         settingsEditorStore = null
@@ -879,10 +989,13 @@ class TaskControlPanelGlobalOverlay(
         if (recordingSaveDialogVisible || settingsModal != null || panelMode == PanelMode.RECORDING) {
             return
         }
+        panelDisplayMode = PanelDisplayMode.FULL
         panelNeedsEntryAnimation = false
         settingsVisible = true
         settingsDismissAnimating = false
         settingsSheetVisible = false
+        setSettingsOverlayInteractionEnabled(enabled = true)
+        setPanelHideReason(PanelHideReason.SETTINGS_OPEN, hidden = true)
         settingsRoute = SettingsRoute.ReportHistory
         settingsTask = null
         settingsEditorStore = null
@@ -1028,10 +1141,13 @@ class TaskControlPanelGlobalOverlay(
         if (recordingSaveDialogVisible || settingsModal != null || panelMode == PanelMode.RECORDING) {
             return
         }
+        panelDisplayMode = PanelDisplayMode.FULL
         panelNeedsEntryAnimation = false
         settingsVisible = true
         settingsDismissAnimating = false
         settingsSheetVisible = false
+        setSettingsOverlayInteractionEnabled(enabled = true)
+        setPanelHideReason(PanelHideReason.SETTINGS_OPEN, hidden = true)
         settingsRoute = SettingsRoute.RunHistory
         settingsTask = null
         settingsEditorStore = null
@@ -1049,6 +1165,7 @@ class TaskControlPanelGlobalOverlay(
         if (!settingsVisible || settingsDismissAnimating) {
             return
         }
+        panelDisplayMode = PanelDisplayMode.FULL
         settingsDismissAnimating = true
         settingsSheetVisible = false
         touchUi()
@@ -1057,6 +1174,7 @@ class TaskControlPanelGlobalOverlay(
             settingsVisible = false
             settingsSheetVisible = false
             settingsDismissAnimating = false
+            setPanelHideReason(PanelHideReason.SETTINGS_OPEN, hidden = false)
             settingsRoute = SettingsRoute.TaskList
             settingsTask = null
             settingsEditorStore = null
@@ -1187,11 +1305,17 @@ class TaskControlPanelGlobalOverlay(
             panelEntered = true
             panelNeedsEntryAnimation = false
         }
-        val panelVisible = panelEntered &&
+        val fullPanelVisible = panelEntered &&
             !panelDismissAnimating &&
-            !settingsVisible &&
+            panelDisplayMode == PanelDisplayMode.FULL &&
             !recordingSaveDialogVisible &&
-            settingsModal == null
+            settingsModal == null &&
+            !hasPanelHideReason()
+        val miniPanelVisible = panelEntered &&
+            !panelDismissAnimating &&
+            panelDisplayMode == PanelDisplayMode.MINI &&
+            !hasPanelHideReason()
+        val panelVisible = fullPanelVisible || miniPanelVisible
         val panelAlpha by animateFloatAsState(
             targetValue = if (panelVisible) 1f else 0f,
             animationSpec = tween(durationMillis = 180),
@@ -1224,10 +1348,13 @@ class TaskControlPanelGlobalOverlay(
         Card(
             modifier = Modifier
                 .width(
-                    when (panelMode) {
-                        PanelMode.RECORDING -> 222.dp
-                        PanelMode.RUNNING -> 264.dp
-                        PanelMode.NORMAL -> 186.dp
+                    when (panelDisplayMode) {
+                        PanelDisplayMode.MINI -> 150.dp
+                        PanelDisplayMode.FULL -> when (panelMode) {
+                            PanelMode.RECORDING -> 222.dp
+                            PanelMode.RUNNING -> 264.dp
+                            PanelMode.NORMAL -> 186.dp
+                        }
                     },
                 )
                 .graphicsLayer {
@@ -1246,12 +1373,37 @@ class TaskControlPanelGlobalOverlay(
                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Crossfade(
-                    targetState = panelMode,
-                    animationSpec = tween(durationMillis = 80, easing = FastOutSlowInEasing),
-                    label = "control_panel_mode",
-                ) { mode ->
-                    when (mode) {
+                if (panelDisplayMode == PanelDisplayMode.MINI) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        OutlinedButton(
+                            modifier = Modifier.weight(1f),
+                            onClick = { restoreSettingsOverlayFromMini() },
+                        ) {
+                            Text("恢复")
+                        }
+                        CircleActionIconButton(
+                            onClick = { dismissPanelWithAnimation() },
+                            icon = { tint ->
+                                Icon(
+                                    imageVector = Icons.Rounded.Close,
+                                    contentDescription = "移除面板",
+                                    tint = tint,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            },
+                        )
+                    }
+                } else {
+                    Crossfade(
+                        targetState = panelMode,
+                        animationSpec = tween(durationMillis = 80, easing = FastOutSlowInEasing),
+                        label = "control_panel_mode",
+                    ) { mode ->
+                        when (mode) {
                         PanelMode.RECORDING -> {
                             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Row(
@@ -1480,6 +1632,7 @@ class TaskControlPanelGlobalOverlay(
                     }
                 }
             }
+        }
         }
 
         @Suppress("UNUSED_VARIABLE")
@@ -2026,6 +2179,7 @@ class TaskControlPanelGlobalOverlay(
                 else -> "动作列表"
             },
             showBack = true,
+            showMinimize = true,
             modifier = modifier,
             onBack = {
                 settingsRoute = when (route) {
@@ -2034,7 +2188,8 @@ class TaskControlPanelGlobalOverlay(
                 }
                 touchUi()
             },
-            onClose = { closeSettingsPanel() },
+            onClose = {},
+            onMinimize = ::minimizeSettingsOverlay,
         ) {
             if (isRunHistory) {
                 SettingsRunHistoryPage()
@@ -2053,12 +2208,14 @@ class TaskControlPanelGlobalOverlay(
         SharedOverlayDialogScaffold(
             title = "编辑动作",
             showBack = true,
+            showMinimize = true,
             modifier = modifier,
             onBack = {
                 settingsRoute = SettingsRoute.ActionList
                 touchUi()
             },
-            onClose = { closeSettingsPanel() },
+            onClose = {},
+            onMinimize = ::minimizeSettingsOverlay,
         ) {
             SettingsNodeEditorPage(nodeId = nodeId)
         }
@@ -2924,6 +3081,7 @@ class TaskControlPanelGlobalOverlay(
             resetCaptureGestureState()
             panelNeedsEntryAnimation = false
             panelMode = PanelMode.RECORDING
+            setPanelHideReason(PanelHideReason.RECORDING_INTERACTION, hidden = false)
             startRecordingTicker()
             statusText = "录制中，请在屏幕上执行手势"
             touchUi()
@@ -2933,6 +3091,7 @@ class TaskControlPanelGlobalOverlay(
             recording = false
             recordingPaused = false
             panelMode = PanelMode.NORMAL
+            setPanelHideReason(PanelHideReason.RECORDING_INTERACTION, hidden = false)
             stopRecordingTicker(resetElapsed = true)
             statusText = "开启录制失败"
             touchUi()
@@ -2962,6 +3121,7 @@ class TaskControlPanelGlobalOverlay(
         captureLayoutParams = null
         recording = false
         recordingPaused = false
+        setPanelHideReason(PanelHideReason.RECORDING_INTERACTION, hidden = false)
         resetCaptureGestureState()
         touchUi()
     }
@@ -3161,9 +3321,8 @@ class TaskControlPanelGlobalOverlay(
                 }
             }
         }
-        val panel = overlayView
         val capture = captureView
-        panel?.visibility = View.INVISIBLE
+        setPanelHideReason(PanelHideReason.RECORDING_INTERACTION, hidden = true)
         capture?.visibility = View.INVISIBLE
         setCaptureTouchEnabled(enabled = false)
         try {
@@ -3197,7 +3356,7 @@ class TaskControlPanelGlobalOverlay(
         } finally {
             setCaptureTouchEnabled(enabled = true)
             capture?.visibility = View.VISIBLE
-            panel?.visibility = View.VISIBLE
+            setPanelHideReason(PanelHideReason.RECORDING_INTERACTION, hidden = false)
             replayingGesture = false
             touchUi()
         }

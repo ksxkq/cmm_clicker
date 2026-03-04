@@ -426,3 +426,11 @@ interface ActionPlugin {
    - 所有 modal 关闭入口（按钮/遮罩/异常回收）统一传递 `removeOverlayWhenIdle`，保证无遮罩页面可及时回收 `settingsOverlayView`
    - 对确认类动作引入短延迟（`MODAL_EXIT_DELAY_MS`）在退出动画后执行业务副作用，减少“动画被业务刷新抢断”的视觉不连续
    - scrim 动效去重：确认类 modal 只使用 `ModalHost` 的 scrim 过渡，`SettingsOverlayContent` 的基础 scrim 不再在 modal 场景叠加，避免双曲线叠加造成的背景闪停
+33. 浮层可见性原因驱动（阶段二-交互稳定）：
+   - 新增 `PanelDisplayMode`（`FULL/MINI`）与 `PanelHideReason` 集合（`SETTINGS_OPEN/RECORDING_INTERACTION/RUNNING_TEMP`），主面板可见性改为统一规则计算
+   - 设置页子路由支持“顶部右侧最小化”并保留路由现场，恢复后回到原页面；根页保留“关闭”语义，不开放直接最小化
+   - 录制回放期间改为写入 `PanelHideReason.RECORDING_INTERACTION`，替代直接改 `View` 可见性，减少多场景（设置/录制/运行）互相覆盖导致的状态冲突
+   - 最小化实现调整为“保留 settings overlay 实例 + 关闭触摸 + 设为不可见”，避免 overlay 移除时重置路由状态，保证恢复仍停留在原子页（如编辑动作）
+34. 弹窗导航布局规范（阶段二-单手操作）：
+   - `SharedOverlayDialogScaffold` 的导航动作下沉到底部左侧（根页=关闭，子页=返回），顶部保留标题与可选最小化按钮
+   - 子页不再提供关闭动作，必须先回退到根页再关闭，降低误关闭概率并统一层级语义

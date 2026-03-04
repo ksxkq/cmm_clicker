@@ -538,6 +538,15 @@
 469. 双层 scrim 叠加修复：`SettingsOverlayContent` 在 `settingsModal` 场景不再驱动基础 scrim 动画，仅保留 `TaskControlModalHost` 的全屏 scrim，避免“先亮一下/停顿/再继续”式非连贯背景过渡。
 470. 背景动效职责拆分：基础 scrim 仅服务于设置页 sheet 与录制保存弹层；确认类 modal 的背景动画完全由 `ModalHost` 承担，统一时序并减少叠加闪烁。
 471. 稳定性验证：以上“确认弹窗背景动画连贯性”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+472. 弹窗导航交互重排：`SharedOverlayDialogScaffold` 改为“底部左侧导航按钮（根页=关闭，子页=返回）”，顶部不再放返回/关闭，减少标题栏拥挤并统一单手操作区域。
+473. 子页最小化入口落地：动作列表/历史页/编辑动作页顶部右侧固定【最小化】按钮；任务设置根页不显示最小化，符合“根页关闭、子页回退/最小化”规则。
+474. 浮层显示状态机增强：`TaskControlPanelGlobalOverlay` 新增 `PanelDisplayMode(FULL/MINI)` 与 `PanelHideReason` 集合（`SETTINGS_OPEN/RECORDING_INTERACTION/RUNNING_TEMP`），由原因驱动主面板显示，避免分散 show/hide 调用冲突。
+475. 最小化恢复链路：新增 `minimizeSettingsOverlay()/restoreSettingsOverlayFromMini()`；最小化时仅收起设置层并保留当前路由状态，恢复时回到原子页面，不强制重置到任务列表。
+476. 录制交互隐藏接管：录制回放期间不再直接操作 `View.VISIBLE/INVISIBLE`，改为设置 `PanelHideReason.RECORDING_INTERACTION`，统一纳入面板可见性计算，避免与最小化/设置遮挡逻辑相互覆盖。
+477. 稳定性验证：以上“底部导航 + 子页最小化 + 原因驱动显示状态机”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+478. 最小化恢复路由修复：修正“编辑动作页最小化后恢复回到任务设置根页”问题；最小化不再触发 settings overlay 移除重置，而是切换为 `FLAG_NOT_TOUCHABLE + INVISIBLE` 保持当前路由与编辑上下文。
+479. 设置层交互开关：新增 `settingsLayoutParams` 与 `setSettingsOverlayInteractionEnabled()`，在最小化/恢复与重开设置时显式切换可触摸状态，避免全屏空 overlay 残留拦截触摸。
+480. 稳定性验证：以上“最小化恢复路由修复”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
 
 ## 3. 正在进行
 

@@ -33,5 +33,26 @@ class TaskControlPanelRunExecutionPersistenceTest {
         assertEquals(5, payload.report.stepCount)
         assertEquals(800L, payload.report.durationMs)
     }
-}
 
+    @Test
+    fun `buildRunPostPersistStatusText keeps summary when all persisted`() {
+        val text = buildRunPostPersistStatusText(
+            summary = "模式=REAL 状态=COMPLETED step=5 msg=done",
+            reportPersisted = true,
+            taskRunInfoPersisted = true,
+        )
+
+        assertEquals("模式=REAL 状态=COMPLETED step=5 msg=done", text)
+    }
+
+    @Test
+    fun `buildRunPostPersistStatusText appends warning when persist fails`() {
+        val text = buildRunPostPersistStatusText(
+            summary = "模式=REAL 状态=COMPLETED step=5 msg=done",
+            reportPersisted = false,
+            taskRunInfoPersisted = true,
+        )
+
+        assertEquals("模式=REAL 状态=COMPLETED step=5 msg=done（部分记录写入失败）", text)
+    }
+}

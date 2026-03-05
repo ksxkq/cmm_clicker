@@ -25,9 +25,13 @@ internal fun reduceSettingsOverlayUiState(
             dismissAnimating = false,
         )
 
-        SettingsOverlayUiEvent.SHOW_SHEET -> current.copy(
-            sheetVisible = true,
-        )
+        SettingsOverlayUiEvent.SHOW_SHEET -> {
+            if (!current.visible || current.dismissAnimating) {
+                current
+            } else {
+                current.copy(sheetVisible = true)
+            }
+        }
 
         SettingsOverlayUiEvent.START_DISMISS_ANIMATION -> current.copy(
             dismissAnimating = true,

@@ -178,6 +178,7 @@ class TaskControlPanelGlobalOverlay(
         private const val PANEL_DISMISS_DELAY_MS = 220L
         private const val RECORDING_SAVE_DIALOG_ENTER_DELAY_MS = 18L
         private const val RECORDING_SAVE_TO_START_CONFIRM_DELAY_MS = 220L
+        private const val RUNNING_TRACE_UI_THROTTLE_MS = 80L
         private const val AUX_OVERLAY_SCRIM_ALPHA = 0.5f
         private const val AUX_OVERLAY_SCRIM_FADE_MS = 220
         private const val CLICK_PICKER_SCRIM_ALPHA = 0.08f
@@ -315,6 +316,8 @@ class TaskControlPanelGlobalOverlay(
     private val recordedGestures = mutableListOf<RecordedGesture>()
     @Volatile
     private var runningPauseRequested = false
+    private var lastRunningTraceUiTouchAtMs = 0L
+    private var pendingRunningTraceUiFlush = false
 
     private val panelDisplayMode: PanelDisplayMode
         get() = panelVisibilityState.displayMode
@@ -414,6 +417,7 @@ class TaskControlPanelGlobalOverlay(
             event = "hide.request",
             reason = reason,
         )
+        cancelRunTaskJob(reason = "hide:$reason")
         effectScheduler.cancelAll()
         themeSyncJob?.cancel()
         themeSyncJob = null
@@ -865,6 +869,7 @@ class TaskControlPanelGlobalOverlay(
             event = "panel_overlay.remove",
             reason = reason,
         )
+        cancelRunTaskJob(reason = "remove_overlay:$reason")
         effectScheduler.cancelAll()
         val view = overlayView
         if (view != null) {
@@ -906,6 +911,19 @@ class TaskControlPanelGlobalOverlay(
             reason = "remove_overlay",
         )
         clearPanelHideReasons(reason = "remove_overlay")
+    }
+
+    private fun cancelRunTaskJob(reason: String) {
+        val job = runTaskJob
+        if (job == null || !job.isActive) {
+            runTaskJob = null
+            resetRunningTraceUiThrottle()
+            return
+        }
+        Log.d(TAG, "cancel run task job: $reason")
+        job.cancel(CancellationException(reason))
+        runTaskJob = null
+        resetRunningTraceUiThrottle()
     }
 
     private fun removeSettingsOverlayIfIdle() {
@@ -1007,6 +1025,38 @@ class TaskControlPanelGlobalOverlay(
 
     private fun touchUi() {
         uiRevision++
+    }
+
+    private fun touchUiForRunningTrace() {
+        val nowMs = SystemClock.uptimeMillis()
+        val elapsedMs = nowMs - lastRunningTraceUiTouchAtMs
+        if (elapsedMs >= RUNNING_TRACE_UI_THROTTLE_MS) {
+            lastRunningTraceUiTouchAtMs = nowMs
+            touchUi()
+            return
+        }
+        if (pendingRunningTraceUiFlush) {
+            return
+        }
+        pendingRunningTraceUiFlush = true
+        val delayMs = (RUNNING_TRACE_UI_THROTTLE_MS - elapsedMs).coerceAtLeast(0L)
+        effectScheduler.schedule(
+            key = TaskControlPanelEffectKey.RUNNING_TRACE_UI_FLUSH,
+            delayMs = delayMs,
+        ) {
+            pendingRunningTraceUiFlush = false
+            if (!running) {
+                return@schedule
+            }
+            lastRunningTraceUiTouchAtMs = SystemClock.uptimeMillis()
+            touchUi()
+        }
+    }
+
+    private fun resetRunningTraceUiThrottle() {
+        effectScheduler.cancel(TaskControlPanelEffectKey.RUNNING_TRACE_UI_FLUSH)
+        lastRunningTraceUiTouchAtMs = 0L
+        pendingRunningTraceUiFlush = false
     }
 
     private fun onPanelDragged(deltaX: Float, deltaY: Float) {
@@ -2753,6 +2803,7 @@ class TaskControlPanelGlobalOverlay(
     }
 
     private fun beginRunningPanel(task: TaskRecord) {
+        resetRunningTraceUiThrottle()
         panelMode = PanelMode.RUNNING
         setPanelHideReason(PanelHideReason.RUNNING_TEMP, hidden = false)
         setPanelDisplayMode(
@@ -2767,6 +2818,7 @@ class TaskControlPanelGlobalOverlay(
     private fun resetRunningPanelState() {
         setPanelHideReason(PanelHideReason.RUNNING_TEMP, hidden = false)
         runningPauseRequested = false
+        resetRunningTraceUiThrottle()
         runningPanelState = runningPanelState.reset()
     }
 
@@ -2903,7 +2955,7 @@ class TaskControlPanelGlobalOverlay(
                             return@launch
                         }
                         updateRunningPanelFromTrace(event)
-                        touchUi()
+                        touchUiForRunningTrace()
                     }
                 }
                 val result = withContext(Dispatchers.Default) {
@@ -2925,17 +2977,34 @@ class TaskControlPanelGlobalOverlay(
                     startedAtEpochMs = startedAtMs,
                     finishedAtEpochMs = finishedAtMs,
                 )
+                var reportPersisted = false
+                var taskRunInfoPersisted = false
                 withContext(Dispatchers.IO) {
-                    runCatching { runtimeRunReportRepository.append(persistencePayload.report) }
-                    taskRepository.updateTaskRunInfo(
+                    reportPersisted = runCatching {
+                        runtimeRunReportRepository.append(persistencePayload.report)
+                    }.onFailure { error ->
+                        Log.w(
+                            TAG,
+                            "runtime report append failed: taskId=${task.taskId} traceId=${persistencePayload.report.traceId}",
+                            error,
+                        )
+                    }.isSuccess
+                    taskRunInfoPersisted = taskRepository.updateTaskRunInfo(
                         taskId = task.taskId,
                         status = result.status.name,
                         summary = persistencePayload.summary,
-                    )
+                    ) != null
+                    if (!taskRunInfoPersisted) {
+                        Log.w(TAG, "updateTaskRunInfo failed: taskId=${task.taskId}")
+                    }
                 }
                 refreshRuntimeReportHistory()
                 loadTasks()
-                statusText = persistencePayload.summary
+                statusText = buildRunPostPersistStatusText(
+                    summary = persistencePayload.summary,
+                    reportPersisted = reportPersisted,
+                    taskRunInfoPersisted = taskRunInfoPersisted,
+                )
                 touchUi()
             } catch (_: CancellationException) {
                 val uiModel = buildRunStoppedUiModel()
@@ -2965,6 +3034,7 @@ class TaskControlPanelGlobalOverlay(
                 running = false
                 runningPanelState = runningPanelState.copy(paused = false)
                 runningPauseRequested = false
+                resetRunningTraceUiThrottle()
                 if (panelHideReasons.contains(PanelHideReason.RUNNING_TEMP)) {
                     setPanelHideReason(PanelHideReason.RUNNING_TEMP, hidden = false)
                     setPanelDisplayMode(
@@ -3503,6 +3573,18 @@ class TaskControlPanelGlobalOverlay(
         if (replayingGesture) {
             return
         }
+        val clippedStrokeCount = when (gesture) {
+            is RecordedGesture.Click -> 0
+            is RecordedGesture.MultiPath -> computeReplayClippedStrokeCount(
+                strokeCount = gesture.strokes.size,
+                safeLimit = AccessibilityGestureExecutor.recordStrokeSafeLimit(),
+            )
+        }
+        val replayHint = buildReplayRunningHint(clippedStrokeCount)
+        if (replayHint != null) {
+            statusText = replayHint
+            touchUi()
+        }
         replayingGesture = true
         when (gesture) {
             is RecordedGesture.Click -> {
@@ -3557,11 +3639,11 @@ class TaskControlPanelGlobalOverlay(
             delay(100)
             val gestureStats = TaskAccessibilityService.gestureStatsText()
             Log.d(TAG, "replay result success=$success stats=$gestureStats")
-            statusText = if (success) {
-                "回放完成，已录制 $recordedStepCount 步"
-            } else {
-                "回放失败，已录制 $recordedStepCount 步"
-            }
+            statusText = buildReplayResultStatusText(
+                success = success,
+                recordedStepCount = recordedStepCount,
+                clippedStrokeCount = clippedStrokeCount,
+            )
         } finally {
             setCaptureTouchEnabled(enabled = true)
             capture?.visibility = View.VISIBLE

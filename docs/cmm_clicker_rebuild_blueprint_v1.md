@@ -520,3 +520,30 @@ interface ActionPlugin {
    - 新增 `TaskControlPanelRunExecutionConfig.kt`，将运行引擎参数组装收敛为 `buildRunRuntimeEngineOptions(...)`，统一 `maxSteps/pausePoll/dryRun/stopOnValidationError` 默认值
    - `TaskControlPanelGlobalOverlay.startLastTask()` 改为调用配置构造函数，流程层减少硬编码 options 细节
    - 对应单测 `TaskControlPanelRunExecutionConfigTest` 覆盖配置默认值和 pause 回调透传，保障后续策略调参回归
+54. 运行结果写入可观测性增强（阶段二-稳定性）：
+   - `TaskControlPanelGlobalOverlay.startLastTask()` 对报告写入与任务运行摘要写入增加失败日志，避免存储异常静默
+   - 新增 `buildRunPostPersistStatusText(...)`，将“部分记录写入失败”提示纳入状态文案拼装，提升用户侧问题发现效率
+   - 对应测试扩展到 `TaskControlPanelRunExecutionPersistenceTest`，覆盖写入成功/失败状态文案分支
+55. 运行作业生命周期修复（阶段二-稳定性）：
+   - `TaskControlPanelGlobalOverlay` 新增 `cancelRunTaskJob(...)`，在 `hide/removeOverlay` 链路主动取消运行中的作业
+   - 修复浮层销毁后运行任务仍继续执行的风险，保证“浮层生命周期”与“运行作业生命周期”一致收口
+   - 增加取消来源日志，便于定位是 `hide` 还是 `removeOverlay` 触发终止
+56. 设置层动画竞态修复（阶段二-稳定性）：
+   - `TaskControlPanelSettingsOverlayUiStateMachine` 调整 `SHOW_SHEET` 迁移规则：dismiss 动画进行中不再接受进入事件
+   - 规避“快速开关设置层”时延迟事件反向覆盖退出状态导致的页面闪动/错位
+   - 对应测试 `TaskControlPanelSettingsOverlayUiStateMachineTest` 增加竞态分支覆盖
+57. 运行态高频刷新节流（阶段二-稳定性）：
+   - `TaskControlPanelGlobalOverlay` 为 trace 回调引入 `touchUiForRunningTrace()` 节流（80ms），避免每条 trace 事件触发 UI 刷新
+   - 通过 `resetRunningTraceUiThrottle()` 在运行态开启、结束、取消时统一重置节流状态，防止延迟刷新跨会话串扰
+   - 目标是降低运行态面板的刷新抖动与低端机掉帧概率，同时保持关键状态可见性
+58. 多指轨迹超限可观测性增强（阶段二-稳定性）：
+   - `AccessibilityGestureExecutor.performRecordStrokes(...)` 增加超限裁剪 warning 与有效输入计数日志，提升问题排查可观测性
+   - `TaskControlPanelGlobalOverlay` 在录制回放链路增加“超限裁剪中/已裁剪”状态提示，避免用户误判为随机丢动作
+   - 对应测试 `TaskControlPanelRecordingReplayPresentationTest` 覆盖裁剪计数与文案分支
+59. 高采样回放降级保护（阶段二-稳定性）：
+   - 新增 `AccessibilityGestureTimingPolicy.kt`，为 timed 分段派发增加点数预算限制（单 stroke / multi 总量）
+   - 当采样密度超预算时自动降级到非 timed 派发，优先保证稳定执行与低端机可用性
+   - 对应测试 `AccessibilityGestureTimingPolicyTest` 覆盖预算判定分支；执行器日志同步输出降级原因，便于线上排障
+60. 运行态节流尾部竞态收口（阶段二-稳定性）：
+   - `TaskControlPanelGlobalOverlay.resetRunningTraceUiThrottle()` 增加对 `RUNNING_TRACE_UI_FLUSH` 的显式取消
+   - 防止上一会话延迟刷新任务在下一会话触发，保证节流状态与运行会话边界一致

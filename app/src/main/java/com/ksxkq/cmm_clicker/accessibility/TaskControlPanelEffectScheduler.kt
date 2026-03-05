@@ -10,6 +10,7 @@ internal enum class TaskControlPanelEffectKey {
     PANEL_DISMISS,
     SETTINGS_MODAL_ACTION,
     RECORDING_SAVE_TO_START_CONFIRM,
+    RUNNING_TRACE_UI_FLUSH,
 }
 
 internal fun interface CancellableEffectHandle {

@@ -65,4 +65,20 @@ class TaskControlPanelSettingsOverlayUiStateMachineTest {
         assertEquals(true, next.sheetVisible)
         assertEquals(false, next.dismissAnimating)
     }
+
+    @Test
+    fun `reduceSettingsOverlayUiState ignores show sheet while dismiss animating`() {
+        val current = SettingsOverlayUiState(
+            visible = true,
+            sheetVisible = false,
+            dismissAnimating = true,
+        )
+
+        val next = reduceSettingsOverlayUiState(
+            current = current,
+            event = SettingsOverlayUiEvent.SHOW_SHEET,
+        )
+
+        assertEquals(current, next)
+    }
 }

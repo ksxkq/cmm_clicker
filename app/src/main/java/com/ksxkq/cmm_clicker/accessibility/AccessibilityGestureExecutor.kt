@@ -43,6 +43,8 @@ object AccessibilityGestureExecutor {
 
     fun isAvailable(): Boolean = TaskAccessibilityService.instance != null
 
+    internal fun recordStrokeSafeLimit(): Int = MAX_STROKE_COUNT
+
     suspend fun performClick(
         xRatio: Double,
         yRatio: Double,
@@ -120,13 +122,23 @@ object AccessibilityGestureExecutor {
         strokes: List<GestureStroke>,
     ): Boolean {
         val traceId = "record-${SystemClock.uptimeMillis()}"
-        val validStrokes = strokes
-            .filter { it.points.isNotEmpty() }
+        val inputValidStrokes = strokes.filter { it.points.isNotEmpty() }
+        val validStrokes = inputValidStrokes
             .take(MAX_STROKE_COUNT)
+        val clippedStrokeCount = (inputValidStrokes.size - validStrokes.size).coerceAtLeast(0)
         if (validStrokes.isEmpty()) {
             return false
         }
-        Log.d(TAG, "performRecordStrokes inputStrokes=${strokes.size} validStrokes=${validStrokes.size}")
+        if (clippedStrokeCount > 0) {
+            Log.w(
+                TAG,
+                "performRecordStrokes clippedStrokes=$clippedStrokeCount safeLimit=$MAX_STROKE_COUNT inputValid=${inputValidStrokes.size}",
+            )
+        }
+        Log.d(
+            TAG,
+            "performRecordStrokes inputStrokes=${strokes.size} inputValid=${inputValidStrokes.size} validStrokes=${validStrokes.size}",
+        )
         validStrokes.forEachIndexed { index, stroke ->
             val tsLast = stroke.timestampsMs.lastOrNull() ?: -1L
             Log.d(
@@ -163,14 +175,28 @@ object AccessibilityGestureExecutor {
             canUseTimedSegments(mappedStrokes.first())
             )
         val timedMultiAligned = hasAlignedMultiStart(mappedStrokes)
+        val timedMultiWithinPointBudget = canUseTimedMultiDispatch(
+            strokePointCounts = mappedStrokes.map { it.points.size },
+        )
         val timedMultiMode = (
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
                 mappedStrokes.size > 1 &&
                 mappedStrokes.all { canUseTimedSegments(it) } &&
-                timedMultiAligned
+                timedMultiAligned &&
+                timedMultiWithinPointBudget
             )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && mappedStrokes.size > 1 && !timedMultiWithinPointBudget) {
+            val totalPoints = mappedStrokes.sumOf { it.points.size }
+            Log.w(
+                TAG,
+                "timed multi disabled due to point budget: totalPoints=$totalPoints limit=$TIMED_MULTI_MAX_TOTAL_POINT_COUNT",
+            )
+        }
         if (mappedStrokes.size == 1) {
-            Log.d(TAG, "performRecordStrokes singleStroke mode=timed_continueStroke")
+            Log.d(
+                TAG,
+                "performRecordStrokes singleStroke mode=${if (timedMode) "timed_continueStroke" else "single_dispatch_path"}",
+            )
         }
         if (timedMultiMode) {
             Log.d(TAG, "performRecordStrokes multiStroke mode=timed_multi_continueStroke")
@@ -506,8 +532,10 @@ object AccessibilityGestureExecutor {
     )
 
     private fun canUseTimedSegments(stroke: MappedStroke): Boolean {
-        return stroke.points.size >= 2 &&
-            stroke.timestampsMs.size == stroke.points.size
+        return canUseTimedStrokeDispatch(
+            pointCount = stroke.points.size,
+            timestampCount = stroke.timestampsMs.size,
+        )
     }
 
     private fun hasAlignedMultiStart(

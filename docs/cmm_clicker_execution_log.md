@@ -664,12 +664,35 @@
 595. 运行执行链路接线继续收敛：`TaskControlPanelGlobalOverlay.startLastTask()` 改为调用 `buildRunRuntimeEngineOptions { runningPauseRequested }`，流程层仅保留执行器调用。
 596. 运行配置单测补齐：新增 `TaskControlPanelRunExecutionConfigTest`，覆盖默认配置值与 pause 回调透传行为。
 597. 稳定性验证：以上“运行引擎配置下沉 + 接线收敛”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+598. 运行结果写入可观测性增强：`startLastTask()` 对 `runtimeRunReportRepository.append(...)` 与 `taskRepository.updateTaskRunInfo(...)` 增加失败日志（含 taskId/traceId），避免写入失败静默吞掉。
+599. 状态轻提示补齐：新增 `buildRunPostPersistStatusText(...)`，当报告或运行摘要写入失败时在状态栏追加“部分记录写入失败”，便于用户第一时间感知落盘异常。
+600. 写入状态函数单测扩展：`TaskControlPanelRunExecutionPersistenceTest` 新增“全部成功保持原摘要 / 任一失败追加提示”用例。
+601. 稳定性验证：以上“写入可观测性增强 + 状态轻提示”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+602. 运行作业生命周期修复：`hide/removeOverlay` 新增 `cancelRunTaskJob(...)`，当浮层被隐藏或移除时主动取消运行中的 `runTaskJob`，避免“UI 已关闭但任务仍在后台继续执行”。
+603. 可观测日志补齐：作业取消时输出 `cancel run task job` 调试日志，便于回溯是由 `hide` 还是 `removeOverlay` 触发取消。
+604. 稳定性验证：以上“运行作业生命周期修复”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+605. 设置层动画竞态修复：`SettingsOverlayUiStateMachine` 的 `SHOW_SHEET` 事件新增保护（仅在 `visible=true && dismissAnimating=false` 时生效），避免“开始退出动画后延迟进入事件回放”导致 `sheetVisible` 被错误拉起。
+606. 状态机回归单测扩展：`TaskControlPanelSettingsOverlayUiStateMachineTest` 新增“dismiss 动画进行中忽略 SHOW_SHEET”用例，防止后续动画调度变更引入回归。
+607. 稳定性验证：以上“设置层动画竞态修复”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+608. 运行态 trace 刷新节流：`TaskControlPanelGlobalOverlay` 新增 `touchUiForRunningTrace()`（80ms 节流 + 延迟补刷新），替换 trace 回调中的每事件直接 `touchUi()`，降低高频 trace 导致的 UI 过刷与闪动风险。
+609. 节流生命周期收口：新增 `resetRunningTraceUiThrottle()`，在 `beginRunningPanel/resetRunningPanelState/cancelRunTaskJob/finally` 统一重置，避免延迟刷新任务在会话切换后污染下一次运行态。
+610. 稳定性验证：以上“运行态 trace 刷新节流 + 生命周期收口”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+611. 多指轨迹超限可观测性增强：`AccessibilityGestureExecutor.performRecordStrokes(...)` 新增 `inputValid` 统计与超限 warning 日志（`clippedStrokes`），并公开 `recordStrokeSafeLimit()` 供上层统一读取安全上限。
+612. 录制回放超限提示补齐：新增 `TaskControlPanelRecordingReplayPresentation.kt`，在回放前展示“超限裁剪中”提示，回放结果文案追加“轨迹超限已裁剪 N 条”，减少用户对“动作丢失”的误解。
+613. 回放提示单测补齐：新增 `TaskControlPanelRecordingReplayPresentationTest`，覆盖裁剪计数、运行中提示与结果文案拼装分支。
+614. 稳定性验证：以上“多指轨迹超限可观测性增强”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+615. 高采样回放降级保护：新增 `AccessibilityGestureTimingPolicy.kt`，为 timed 分段派发引入点数预算（单 stroke `<=160`、multi 总点数 `<=480`）；超预算自动降级为非 timed 路径，降低低端机多段派发压力。
+616. 执行器观测与日志纠正：`AccessibilityGestureExecutor` 新增“timed multi 因点数预算降级”的 warning，并修复单 stroke 模式日志误报（不再总是打印 timed 模式）。
+617. 降级策略单测补齐：新增 `AccessibilityGestureTimingPolicyTest`，覆盖单 stroke 时间戳一致性与点数预算、multi 总点数预算分支。
+618. 稳定性验证：以上“高采样回放降级保护 + 执行器日志纠正”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+619. 运行态节流尾部竞态收口：`resetRunningTraceUiThrottle()` 新增 `effectScheduler.cancel(RUNNING_TRACE_UI_FLUSH)`，避免会话切换后迟到 flush 回调触发跨会话 UI 刷新。
+620. 稳定性验证：以上“运行态节流尾部竞态收口”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
 
 ## 3. 正在进行
 
 1. 全局操作面板实机交互打磨（录制态按钮间距/状态文案/误触控制、运行态信息密度与按钮排布、录制提示层反馈；录制保存后开始确认链路已接入）。
 2. 调试面板前置能力推进：已打通“任务菜单历史记录入口 + 删除能力”，下一步继续补齐筛选、搜索与分页体验。
-3. 继续推进页面状态层拆分第二阶段：运行态、本次执行会话态、设置路由、设置模态决策、设置页数据装配与 overlay/主面板状态机与展示判定已完成首轮收敛；延迟副作用调度、WindowManager/View 操作执行器、运行执行 UI 映射、持久化 payload 与运行引擎配置已抽离，下一步继续拆分运行流程控制边界（任务加载与作业生命周期管理）。
+3. 继续推进页面状态层拆分第二阶段：运行态、本次执行会话态、设置路由、设置模态决策、设置页数据装配与 overlay/主面板状态机与展示判定已完成首轮收敛；延迟副作用调度、WindowManager/View 操作执行器、运行执行 UI 映射、持久化 payload、运行引擎配置、写入可观测性与作业生命周期取消已收敛，下一步仅保留实机验证中发现的真实问题修复。
 4. 编辑页组件化：`TaskList/ActionList/NodeEditor`、状态容器、规则逻辑与单测已完成；当前进入实机联调与体验回归阶段。
 5. 录制多指会话实机打磨（手指数上限、停顿阈值、不同机型采样密度）。
 6. 首页任务入口已收敛为单按钮，后续观察是否需要在首页增加“最近任务摘要”只读信息（不引入第二条编辑路径）。

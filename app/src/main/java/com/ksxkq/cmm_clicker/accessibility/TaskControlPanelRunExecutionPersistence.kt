@@ -33,3 +33,14 @@ internal fun buildRunExecutionPersistencePayload(
     )
 }
 
+internal fun buildRunPostPersistStatusText(
+    summary: String,
+    reportPersisted: Boolean,
+    taskRunInfoPersisted: Boolean,
+): String {
+    return if (reportPersisted && taskRunInfoPersisted) {
+        summary
+    } else {
+        "${summary}（部分记录写入失败）"
+    }
+}

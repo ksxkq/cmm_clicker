@@ -831,6 +831,9 @@
 762. 稳定性验证：以上“RUNNING MINI 触发即吸边”改造后通过 `:app:compileDebugKotlin`。
 763. RUNNING MINI 二次触发吸边修复：`snapPanelToHorizontalEdge()` 与 `isMiniDockedToRight()` 在 MINI 模式下改为使用 `miniPanelSizePx().first` 参与边界/中心计算，不再依赖过渡瞬间的旧测量宽度，修复“移动 RUNNING 面板后再次缩小不吸边”问题。
 764. 稳定性验证：以上“MINI 吸边宽度基准修复”改造后通过 `:app:compileDebugKotlin`。
+765. 面板透明区域拦截点击修复：`applyPanelWindowSizePolicy(...)` 在非锁定态从固定窗口尺寸（`300x172dp`）改为 `WRAP_CONTENT`，使 WindowManager 窗口边界与可见卡片一致，避免透明底部/右侧区域遮挡下层点击。
+766. 过渡策略保持不变：仅在 `panelWindowSizeTransitionLocked=true` 的短时过渡窗口继续使用锁定尺寸；过渡结束后恢复 `WRAP_CONTENT`，兼顾动画稳定与触摸命中准确性。
+767. 稳定性验证：以上“透明区域触摸拦截修复”改造后通过 `:app:compileDebugKotlin` 与 `:app:testDebugUnitTest`。
 
 ## 3. 正在进行
 

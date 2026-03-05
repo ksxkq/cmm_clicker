@@ -1420,8 +1420,10 @@ class TaskControlPanelGlobalOverlay(
                 WindowManager.LayoutParams.WRAP_CONTENT
             }
         } else {
-            params.width = dp(PANEL_WINDOW_FIXED_WIDTH_DP)
-            params.height = dp(PANEL_WINDOW_FIXED_HEIGHT_DP)
+            // Keep window bounds aligned with visible panel to avoid transparent hit area
+            // blocking touches on underlying app content.
+            params.width = WindowManager.LayoutParams.WRAP_CONTENT
+            params.height = WindowManager.LayoutParams.WRAP_CONTENT
         }
     }
 

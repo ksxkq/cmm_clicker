@@ -124,10 +124,7 @@ import com.ksxkq.cmm_clicker.core.model.NodeKind
 import com.ksxkq.cmm_clicker.core.model.TaskBundle
 import com.ksxkq.cmm_clicker.core.model.TaskFlow
 import com.ksxkq.cmm_clicker.core.runtime.FlowRuntimeEngine
-import com.ksxkq.cmm_clicker.core.runtime.RuntimeEngineOptions
 import com.ksxkq.cmm_clicker.core.runtime.RuntimeExecutionResult
-import com.ksxkq.cmm_clicker.core.runtime.RuntimeExecutionStatus
-import com.ksxkq.cmm_clicker.core.runtime.RuntimeRunReport
 import com.ksxkq.cmm_clicker.core.runtime.RuntimeTraceCollector
 import com.ksxkq.cmm_clicker.core.runtime.RuntimeTraceEvent
 import com.ksxkq.cmm_clicker.core.runtime.RuntimeTracePhase
@@ -175,6 +172,10 @@ class TaskControlPanelGlobalOverlay(
         private const val PREF_NAME = "task_control_overlay"
         private const val KEY_SELECTED_TASK_ID = "selected_task_id"
         private const val KEY_LAST_STARTED_TASK_ID = "last_started_task_id"
+        private const val SETTINGS_SHEET_ENTER_DELAY_MS = 16L
+        private const val SETTINGS_DISMISS_DELAY_MS = 200L
+        private const val PANEL_ENTRY_DELAY_MS = 18L
+        private const val PANEL_DISMISS_DELAY_MS = 220L
         private const val RECORDING_SAVE_DIALOG_ENTER_DELAY_MS = 18L
         private const val RECORDING_SAVE_TO_START_CONFIRM_DELAY_MS = 220L
         private const val AUX_OVERLAY_SCRIM_ALPHA = 0.5f
@@ -224,9 +225,19 @@ class TaskControlPanelGlobalOverlay(
     )
 
     private val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+    private val windowOps = WindowOpsExecutor<View, WindowManager.LayoutParams>(
+        addOp = windowManager::addView,
+        removeOp = windowManager::removeView,
+        updateOp = windowManager::updateViewLayout,
+        onWarn = { message, throwable -> Log.w(TAG, message, throwable) },
+        onError = { message, throwable -> Log.e(TAG, message, throwable) },
+    )
     private val taskRepository = LocalFileTaskRepository(context)
     private val runtimeRunReportRepository = RuntimeRunReportRepository(context)
     private val themePreferenceStore = ThemePreferenceStore(context)
+    private val effectScheduler = KeyedEffectScheduler<TaskControlPanelEffectKey>(
+        launcher = CoroutineEffectLauncher(scope),
+    )
     private val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
 
     private var overlayView: ComposeView? = null
@@ -388,7 +399,7 @@ class TaskControlPanelGlobalOverlay(
         startThemeSync()
         touchUi()
         if (openSettings) {
-            delay(16)
+            delay(SETTINGS_SHEET_ENTER_DELAY_MS)
             settingsSheetVisible = true
             touchUi()
         }
@@ -403,6 +414,7 @@ class TaskControlPanelGlobalOverlay(
             event = "hide.request",
             reason = reason,
         )
+        effectScheduler.cancelAll()
         themeSyncJob?.cancel()
         themeSyncJob = null
         stopRecordingTicker(resetElapsed = true)
@@ -532,8 +544,11 @@ class TaskControlPanelGlobalOverlay(
         }
         if (params.flags != nextFlags) {
             params.flags = nextFlags
-            runCatching { windowManager.updateViewLayout(view, params) }
-                .onFailure { Log.w(TAG, "setSettingsOverlayInteractionEnabled failed: enabled=$enabled", it) }
+            windowOps.tryUpdateViewLayout(
+                view = view,
+                params = params,
+                reason = "settings_overlay_interaction enabled=$enabled",
+            )
         }
         view.visibility = if (enabled) View.VISIBLE else View.INVISIBLE
         recordPanelVisibilityEvent(
@@ -565,9 +580,11 @@ class TaskControlPanelGlobalOverlay(
         applySettingsOverlayUiState(next)
     }
 
-    private fun startSettingsSheetEnterAnimation(delayMs: Long = 16L) {
-        scope.launch {
-            delay(delayMs)
+    private fun startSettingsSheetEnterAnimation() {
+        effectScheduler.schedule(
+            key = TaskControlPanelEffectKey.SETTINGS_SHEET_ENTER,
+            delayMs = SETTINGS_SHEET_ENTER_DELAY_MS,
+        ) {
             dispatchSettingsOverlayUiEvent(SettingsOverlayUiEvent.SHOW_SHEET)
             touchUi()
         }
@@ -579,8 +596,10 @@ class TaskControlPanelGlobalOverlay(
     ) {
         dispatchSettingsOverlayUiEvent(SettingsOverlayUiEvent.START_DISMISS_ANIMATION)
         touchUi()
-        scope.launch {
-            delay(200)
+        effectScheduler.schedule(
+            key = TaskControlPanelEffectKey.SETTINGS_DISMISS,
+            delayMs = SETTINGS_DISMISS_DELAY_MS,
+        ) {
             dispatchSettingsOverlayUiEvent(SettingsOverlayUiEvent.FINISH_DISMISS_ANIMATION)
             afterDismiss()
             recordPanelVisibilityEvent(
@@ -696,7 +715,16 @@ class TaskControlPanelGlobalOverlay(
             applyCutoutModeIfSupported(this)
         }
         try {
-            windowManager.addView(compose, params)
+            if (
+                !windowOps.tryAddView(
+                    view = compose,
+                    params = params,
+                    reason = "ensure_overlay_view",
+                )
+            ) {
+                owner.destroy()
+                return
+            }
             overlayView = compose
             composeOwner = owner
             layoutParams = params
@@ -755,7 +783,16 @@ class TaskControlPanelGlobalOverlay(
             applyCutoutModeIfSupported(this)
         }
         try {
-            windowManager.addView(compose, params)
+            if (
+                !windowOps.tryAddView(
+                    view = compose,
+                    params = params,
+                    reason = "ensure_settings_overlay_view",
+                )
+            ) {
+                owner.destroy()
+                return
+            }
             settingsOverlayView = compose
             settingsComposeOwner = owner
             settingsLayoutParams = params
@@ -795,7 +832,10 @@ class TaskControlPanelGlobalOverlay(
         )
         val view = settingsOverlayView
         if (view != null) {
-            runCatching { windowManager.removeView(view) }
+            windowOps.tryRemoveView(
+                view = view,
+                reason = "remove_settings_overlay:$reason",
+            )
         }
         settingsOverlayView = null
         settingsLayoutParams = null
@@ -825,9 +865,13 @@ class TaskControlPanelGlobalOverlay(
             event = "panel_overlay.remove",
             reason = reason,
         )
+        effectScheduler.cancelAll()
         val view = overlayView
         if (view != null) {
-            runCatching { windowManager.removeView(view) }
+            windowOps.tryRemoveView(
+                view = view,
+                reason = "remove_overlay:$reason",
+            )
         }
         overlayView = null
         layoutParams = null
@@ -954,11 +998,11 @@ class TaskControlPanelGlobalOverlay(
         params.x = panelOffsetX
         params.y = panelOffsetY
         params.flags = panelWindowFlags()
-        runCatching {
-            windowManager.updateViewLayout(view, params)
-        }.onFailure {
-            Log.e(TAG, "updateViewLayout failed", it)
-        }
+        windowOps.tryUpdateViewLayout(
+            view = view,
+            params = params,
+            reason = "update_overlay_layout",
+        )
     }
 
     private fun touchUi() {
@@ -983,11 +1027,11 @@ class TaskControlPanelGlobalOverlay(
         panelOffsetY = (panelOffsetY + deltaY.roundToInt()).coerceIn(0, maxY)
         params.x = panelOffsetX
         params.y = panelOffsetY
-        runCatching {
-            windowManager.updateViewLayout(view, params)
-        }.onFailure {
-            Log.e(TAG, "panel drag update failed", it)
-        }
+        windowOps.tryUpdateViewLayout(
+            view = view,
+            params = params,
+            reason = "panel_drag_update",
+        )
     }
 
     private fun dismissPanelWithAnimation() {
@@ -1000,8 +1044,10 @@ class TaskControlPanelGlobalOverlay(
             reason = "user_close_panel",
         )
         touchUi()
-        scope.launch {
-            delay(220)
+        effectScheduler.schedule(
+            key = TaskControlPanelEffectKey.PANEL_DISMISS,
+            delayMs = PANEL_DISMISS_DELAY_MS,
+        ) {
             hide(reason = "panel_dismiss_animation")
         }
     }
@@ -1276,16 +1322,20 @@ class TaskControlPanelGlobalOverlay(
         when (resolvedAction) {
             SettingsModalAction.Dismiss -> return
             is SettingsModalAction.StartTask -> {
-                scope.launch {
-                    delay(MODAL_EXIT_DELAY_MS)
+                effectScheduler.schedule(
+                    key = TaskControlPanelEffectKey.SETTINGS_MODAL_ACTION,
+                    delayMs = MODAL_EXIT_DELAY_MS,
+                ) {
                     startLastTask(preferredTaskId = resolvedAction.taskId)
                 }
                 return
             }
 
             is SettingsModalAction.DeleteRuntimeReport -> {
-                scope.launch {
-                    delay(MODAL_EXIT_DELAY_MS)
+                effectScheduler.schedule(
+                    key = TaskControlPanelEffectKey.SETTINGS_MODAL_ACTION,
+                    delayMs = MODAL_EXIT_DELAY_MS,
+                ) {
                     deleteRuntimeReport(resolvedAction.reportId)
                 }
                 return
@@ -1463,7 +1513,7 @@ class TaskControlPanelGlobalOverlay(
                 return@LaunchedEffect
             }
             panelEntered = false
-            delay(18)
+            delay(PANEL_ENTRY_DELAY_MS)
             panelEntered = true
             panelNeedsEntryAnimation = false
         }
@@ -2829,13 +2879,13 @@ class TaskControlPanelGlobalOverlay(
             try {
                 val candidateTaskId = preferredTaskId ?: resolveCandidateTaskId()
                 if (candidateTaskId == null) {
-                    statusText = "没有可执行任务"
+                    statusText = RUN_STATUS_NO_TASK
                     touchUi()
                     return@launch
                 }
                 val task = withContext(Dispatchers.IO) { taskRepository.getTask(candidateTaskId) }
                 if (task == null) {
-                    statusText = "任务不存在，无法执行"
+                    statusText = RUN_STATUS_TASK_NOT_FOUND
                     touchUi()
                     return@launch
                 }
@@ -2844,7 +2894,7 @@ class TaskControlPanelGlobalOverlay(
                 persistIds()
                 running = true
                 beginRunningPanel(task)
-                statusText = "运行中..."
+                statusText = RUN_STATUS_RUNNING
                 touchUi()
                 val startedAtMs = System.currentTimeMillis()
                 val traceCollector = OverlayRuntimeTraceCollector { event ->
@@ -2858,12 +2908,8 @@ class TaskControlPanelGlobalOverlay(
                 }
                 val result = withContext(Dispatchers.Default) {
                     FlowRuntimeEngine(
-                        options = RuntimeEngineOptions(
-                            dryRun = false,
-                            maxSteps = 200,
-                            stopOnValidationError = true,
+                        options = buildRunRuntimeEngineOptions(
                             isPaused = { runningPauseRequested },
-                            pausePollIntervalMs = 120L,
                         ),
                     ).execute(
                         bundle = task.bundle,
@@ -2872,54 +2918,48 @@ class TaskControlPanelGlobalOverlay(
                 }
                 updateRunningPanelFromResult(result)
                 val finishedAtMs = System.currentTimeMillis()
-                val summary = buildString {
-                    append("模式=REAL ")
-                    append("状态=${result.status} ")
-                    append("step=${result.stepCount} ")
-                    append("msg=${result.message ?: "-"}")
-                }
-                val report = RuntimeRunReport.fromExecution(
-                    source = "control_panel_overlay",
+                val persistencePayload = buildRunExecutionPersistencePayload(
                     taskId = task.taskId,
                     taskName = task.name,
-                    dryRun = false,
+                    result = result,
                     startedAtEpochMs = startedAtMs,
                     finishedAtEpochMs = finishedAtMs,
-                    result = result,
                 )
                 withContext(Dispatchers.IO) {
-                    runCatching { runtimeRunReportRepository.append(report) }
+                    runCatching { runtimeRunReportRepository.append(persistencePayload.report) }
                     taskRepository.updateTaskRunInfo(
                         taskId = task.taskId,
                         status = result.status.name,
-                        summary = summary,
+                        summary = persistencePayload.summary,
                     )
                 }
                 refreshRuntimeReportHistory()
                 loadTasks()
-                statusText = summary
+                statusText = persistencePayload.summary
                 touchUi()
             } catch (_: CancellationException) {
+                val uiModel = buildRunStoppedUiModel()
                 runningPauseRequested = false
                 runningPanelState = runningPanelState.withUserStopped()
                 finalizeCurrentRunSession(
-                    status = RuntimeExecutionStatus.STOPPED.name,
-                    message = "user_requested_stop",
-                    errorCode = "",
+                    status = uiModel.sessionStatus.name,
+                    message = uiModel.sessionMessage,
+                    errorCode = uiModel.sessionErrorCode,
                     stepCount = runningPanelState.stepCount,
                 )
-                statusText = "任务已停止"
+                statusText = uiModel.statusText
                 touchUi()
             } catch (error: Throwable) {
+                val uiModel = buildRunFailedUiModel(errorMessage = error.message)
                 runningPauseRequested = false
-                runningPanelState = runningPanelState.withRuntimeError(message = "运行异常")
+                runningPanelState = runningPanelState.withRuntimeError(message = uiModel.panelMessage)
                 finalizeCurrentRunSession(
-                    status = RuntimeExecutionStatus.FAILED.name,
-                    message = error.message ?: "unknown",
-                    errorCode = "",
+                    status = uiModel.sessionStatus.name,
+                    message = uiModel.sessionMessage,
+                    errorCode = uiModel.sessionErrorCode,
                     stepCount = runningPanelState.stepCount,
                 )
-                statusText = "运行失败: ${error.message ?: "unknown"}"
+                statusText = uiModel.statusText
                 touchUi()
             } finally {
                 running = false
@@ -3119,8 +3159,12 @@ class TaskControlPanelGlobalOverlay(
             stopRecordingTicker(resetElapsed = true)
             statusText = "已保存录制任务：${saved.name}"
             touchUi()
-            delay(RECORDING_SAVE_TO_START_CONFIRM_DELAY_MS)
-            promptStartLastTaskConfirmation()
+            effectScheduler.schedule(
+                key = TaskControlPanelEffectKey.RECORDING_SAVE_TO_START_CONFIRM,
+                delayMs = RECORDING_SAVE_TO_START_CONFIRM_DELAY_MS,
+            ) {
+                promptStartLastTaskConfirmation()
+            }
         }
     }
 
@@ -3231,8 +3275,12 @@ class TaskControlPanelGlobalOverlay(
             }
         }
 
-        runCatching {
-            windowManager.addView(hintView, overlayParams)
+        val captureAdded = windowOps.tryAddView(
+            view = hintView,
+            params = overlayParams,
+            reason = "start_capture_overlay",
+        )
+        if (captureAdded) {
             captureView = hintView
             captureTrailView = trailView
             captureLayoutParams = overlayParams
@@ -3246,8 +3294,7 @@ class TaskControlPanelGlobalOverlay(
             statusText = "录制中，请在屏幕上执行手势"
             touchUi()
             restackControlPanelAboveCapture()
-        }.onFailure {
-            Log.e(TAG, "add record overlay failed", it)
+        } else {
             recording = false
             recordingPaused = false
             panelMode = PanelMode.NORMAL
@@ -3264,17 +3311,19 @@ class TaskControlPanelGlobalOverlay(
         if (!panel.isAttachedToWindow) {
             return
         }
-        runCatching {
-            windowManager.removeView(panel)
-            windowManager.addView(panel, params)
-        }.onFailure {
-            Log.w(TAG, "restackControlPanelAboveCapture failed", it)
-        }
+        windowOps.tryRestackView(
+            view = panel,
+            params = params,
+            reason = "restack_control_panel_above_capture",
+        )
     }
 
     private fun stopCaptureOverlay() {
         captureView?.let { view ->
-            runCatching { windowManager.removeView(view) }
+            windowOps.tryRemoveView(
+                view = view,
+                reason = "stop_capture_overlay",
+            )
         }
         captureView = null
         captureTrailView = null
@@ -3534,11 +3583,11 @@ class TaskControlPanelGlobalOverlay(
             return
         }
         params.flags = nextFlags
-        runCatching {
-            windowManager.updateViewLayout(view, params)
-        }.onFailure {
-            Log.w(TAG, "setCaptureTouchEnabled failed: enabled=$enabled", it)
-        }
+        windowOps.tryUpdateViewLayout(
+            view = view,
+            params = params,
+            reason = "capture_touch enabled=$enabled",
+        )
     }
 
     private fun toRecordedStroke(

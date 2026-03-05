@@ -642,12 +642,34 @@
 573. 稳定性验证：以上“重复状态重置收敛”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
 574. 设置层入口阻断判断收敛：`TaskControlPanelGlobalOverlay` 新增 `isSettingsOverlayEntryBlocked()`，统一 `openSettingsPanel/openReportHistoryOverlay/openRunHistoryOverlay` 的前置阻断条件（录制保存弹层、modal、录制态）。
 575. 稳定性验证：以上“设置层入口阻断判断收敛”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+576. 动画延迟常量化与统一调度入口：`TaskControlPanelGlobalOverlay` 新增 `SETTINGS_SHEET_ENTER_DELAY_MS/SETTINGS_DISMISS_DELAY_MS/PANEL_ENTRY_DELAY_MS/PANEL_DISMISS_DELAY_MS` 与 `launchAfterDelay(...)`，设置层进入/退出、主面板关闭、modal action 延迟副作用统一走同一调度入口，移除分散魔法数。
+577. 稳定性验证：以上“延迟常量化 + 延迟调度入口统一”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+578. 副作用调度器抽离：新增 `TaskControlPanelEffectScheduler.kt`（`TaskControlPanelEffectKey` + `KeyedEffectScheduler` + `CoroutineEffectLauncher`），支持按 key 覆盖旧任务，统一管理延迟副作用调度。
+579. Overlay 调度接线收敛：`TaskControlPanelGlobalOverlay` 的设置层进入/退出、主面板关闭、modal action 延迟执行与“录制保存后开始确认”全部改为 `effectScheduler.schedule(...)`；`hide/removeOverlay` 增加 `cancelAll()`，避免 overlay 移除后延迟任务残留回调。
+580. 调度器单测补齐：新增 `TaskControlPanelEffectSchedulerTest`，覆盖“同 key 覆盖旧任务”“不同 key 并行保留”“cancel/cancelAll 取消挂起任务”。
+581. 稳定性验证：以上“副作用调度器抽离 + Overlay 接线收敛”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+582. WindowManager 副作用执行器抽离：新增 `TaskControlPanelWindowOpsExecutor.kt`，统一 `add/remove/update/restack` 操作的异常兜底与日志分级（warn/error），减少 `GlobalOverlay` 内散落的 `runCatching` + `windowManager.*` 调用。
+583. Overlay 接线替换：`TaskControlPanelGlobalOverlay` 新增 `windowOps`，并将设置层交互开关、overlay 挂载/移除、主面板拖动布局更新、录制层 add/remove/restack、capture 触摸开关更新全部改为统一执行器调用。
+584. 执行器单测补齐：新增 `TaskControlPanelWindowOpsExecutorTest`，覆盖 add 成功、update 失败错误上报、restack-remove 失败短路与 warn 上报，保证后续重构可回归验证。
+585. 稳定性验证：以上“WindowManager 副作用执行器抽离 + Overlay 接线替换”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+586. 运行执行 UI 映射下沉：新增 `TaskControlPanelRunExecutionPresentation.kt`，收敛运行前状态文案（无任务/任务不存在/运行中）、结果摘要文案 `buildRunSummaryText(...)`、停止/失败终态映射（`buildRunStoppedUiModel/buildRunFailedUiModel`）。
+587. 运行流程接线收敛：`TaskControlPanelGlobalOverlay.startLastTask()` 改为消费上述 presentation 纯函数，移除函数内硬编码文案与终态映射细节，保留流程编排与状态写回职责。
+588. 运行映射单测补齐：新增 `TaskControlPanelRunExecutionPresentationTest`，覆盖 summary 格式、缺省 message 回退、停止终态与失败终态映射。
+589. 稳定性验证：以上“运行执行 UI 映射下沉 + 接线收敛”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+590. 运行持久化 payload 下沉：新增 `TaskControlPanelRunExecutionPersistence.kt`，统一构造 `RunExecutionPersistencePayload(summary + RuntimeRunReport)`，收敛 `report source/task/result/time` 拼装细节。
+591. 运行流程接线继续收敛：`TaskControlPanelGlobalOverlay.startLastTask()` 改为消费 `buildRunExecutionPersistencePayload(...)`，移除内联 `RuntimeRunReport.fromExecution(...)` 与重复 summary 写入逻辑。
+592. 持久化 payload 单测补齐：新增 `TaskControlPanelRunExecutionPersistenceTest`，覆盖 summary、report source/task/status/step/duration 映射。
+593. 稳定性验证：以上“运行持久化 payload 下沉 + 接线收敛”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+594. 运行引擎配置下沉：新增 `TaskControlPanelRunExecutionConfig.kt`，将 `maxSteps/pausePoll/dryRun/stopOnValidationError` 组装收敛为 `buildRunRuntimeEngineOptions(...)`，避免 `startLastTask()` 内部硬编码配置散落。
+595. 运行执行链路接线继续收敛：`TaskControlPanelGlobalOverlay.startLastTask()` 改为调用 `buildRunRuntimeEngineOptions { runningPauseRequested }`，流程层仅保留执行器调用。
+596. 运行配置单测补齐：新增 `TaskControlPanelRunExecutionConfigTest`，覆盖默认配置值与 pause 回调透传行为。
+597. 稳定性验证：以上“运行引擎配置下沉 + 接线收敛”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
 
 ## 3. 正在进行
 
 1. 全局操作面板实机交互打磨（录制态按钮间距/状态文案/误触控制、运行态信息密度与按钮排布、录制提示层反馈；录制保存后开始确认链路已接入）。
 2. 调试面板前置能力推进：已打通“任务菜单历史记录入口 + 删除能力”，下一步继续补齐筛选、搜索与分页体验。
-3. 继续推进页面状态层拆分第二阶段：运行态、本次执行会话态、设置路由、设置模态决策、设置页数据装配与 overlay/主面板状态机与展示判定已完成首轮收敛，下一步继续抽离“状态机副作用调度器（定时/动画/View 操作）”与 UI 渲染绑定。
+3. 继续推进页面状态层拆分第二阶段：运行态、本次执行会话态、设置路由、设置模态决策、设置页数据装配与 overlay/主面板状态机与展示判定已完成首轮收敛；延迟副作用调度、WindowManager/View 操作执行器、运行执行 UI 映射、持久化 payload 与运行引擎配置已抽离，下一步继续拆分运行流程控制边界（任务加载与作业生命周期管理）。
 4. 编辑页组件化：`TaskList/ActionList/NodeEditor`、状态容器、规则逻辑与单测已完成；当前进入实机联调与体验回归阶段。
 5. 录制多指会话实机打磨（手指数上限、停顿阈值、不同机型采样密度）。
 6. 首页任务入口已收敛为单按钮，后续观察是否需要在首页增加“最近任务摘要”只读信息（不引入第二条编辑路径）。

@@ -497,3 +497,26 @@ interface ActionPlugin {
 47. 设置层入口阻断规则收敛（阶段二-状态拆分）：
    - `TaskControlPanelGlobalOverlay` 新增 `isSettingsOverlayEntryBlocked()`，统一“设置/历史/本次执行历史”入口的阻断条件
    - 避免不同入口各自维护阻断表达式，降低后续交互改动出现条件漂移的风险
+48. 延迟调度规则收敛（阶段二-状态拆分）：
+   - `TaskControlPanelGlobalOverlay` 将设置层进入/退出、面板关闭与 modal action 的延迟调度统一收敛到 `launchAfterDelay(...)`
+   - 统一定义 `SETTINGS_SHEET_ENTER_DELAY_MS/SETTINGS_DISMISS_DELAY_MS/PANEL_ENTRY_DELAY_MS/PANEL_DISMISS_DELAY_MS`，替代分散硬编码时序常量，便于后续调参与回归定位
+49. 副作用调度器抽离（阶段二-状态拆分）：
+   - 新增 `TaskControlPanelEffectScheduler.kt`，以 `KeyedEffectScheduler` + `TaskControlPanelEffectKey` 统一承接延迟副作用调度，并支持同 key 新任务覆盖旧任务
+   - `TaskControlPanelGlobalOverlay` 接入 keyed 调度后，设置层动画、面板关闭、modal 动作与录制保存后确认的延迟链路不再直接散落 `scope.launch + delay`
+   - 在 `hide/removeOverlay` 统一 `cancelAll()`，减少 overlay 生命周期结束后延迟回调命中已销毁 UI 状态的风险
+50. WindowManager 操作执行器抽离（阶段二-状态拆分）：
+   - 新增 `TaskControlPanelWindowOpsExecutor.kt`，统一承接 `add/remove/update/restack` 的异常兜底与日志分级，降低 `GlobalOverlay` 对 WindowManager 细节的直接耦合
+   - `TaskControlPanelGlobalOverlay` 接入 `windowOps` 后，设置层交互切换、overlay attach/detach、拖动布局更新、录制层 add/remove/restack 与 capture touch 更新均走统一执行器
+   - 执行器采用泛型签名，单测可使用假对象验证错误短路与日志回调，避免依赖 Android 运行时
+51. 运行执行 UI 映射下沉（阶段二-状态拆分）：
+   - 新增 `TaskControlPanelRunExecutionPresentation.kt`，将运行前提示文案、执行摘要文案与停止/失败终态映射沉淀为纯函数
+   - `TaskControlPanelGlobalOverlay.startLastTask()` 改为消费 presentation 模型，流程层仅保留“任务加载 -> 执行 -> 持久化 -> 状态写回”编排逻辑
+   - 对应单测 `TaskControlPanelRunExecutionPresentationTest` 覆盖 summary 模板与终态映射回退，确保后续流程重构不破坏用户可见文案
+52. 运行持久化 payload 下沉（阶段二-状态拆分）：
+   - 新增 `TaskControlPanelRunExecutionPersistence.kt`，将运行完成后的 `summary/report` 构造统一收敛为 `buildRunExecutionPersistencePayload(...)`
+   - `TaskControlPanelGlobalOverlay.startLastTask()` 改为消费 payload，流程层不再内联 `RuntimeRunReport.fromExecution(...)` 参数拼装
+   - 对应单测 `TaskControlPanelRunExecutionPersistenceTest` 覆盖 source/task/status/step/duration 映射，降低后续运行链路拆分回归风险
+53. 运行引擎配置下沉（阶段二-状态拆分）：
+   - 新增 `TaskControlPanelRunExecutionConfig.kt`，将运行引擎参数组装收敛为 `buildRunRuntimeEngineOptions(...)`，统一 `maxSteps/pausePoll/dryRun/stopOnValidationError` 默认值
+   - `TaskControlPanelGlobalOverlay.startLastTask()` 改为调用配置构造函数，流程层减少硬编码 options 细节
+   - 对应单测 `TaskControlPanelRunExecutionConfigTest` 覆盖配置默认值和 pause 回调透传，保障后续策略调参回归

@@ -1,6 +1,6 @@
 # cmm_clicker 重写蓝图 v1
 
-## 0. 当前实现进度（2026-03-02）
+## 0. 当前实现进度（2026-03-05）
 
 1. 已完成 `FlowGraph + Runtime + 插件化动作` 骨架。
 2. 已完成辅助服务执行链路、可视化反馈、自动授权后自动启用。
@@ -13,6 +13,13 @@
 9. 页面层完成首轮拆分：`MainActivity` 瘦身为入口编排，任务页/控制台页与公共组件拆分到独立文件。
 10. 新增全局“操作面板”浮窗（设置/录制/开始），并复用任务库组件作为浮窗设置页，打通“任意 App 界面启动任务 + 录制手势入库”的闭环。
 11. 浮窗层级策略更新：操作面板与任务列表使用两个独立 overlay（两个 `addView`）；任务列表内编辑采用同窗路由栈，不在该链路继续新增 overlay。
+12. 面板状态切换策略收敛：`NORMAL/RECORDING/RUNNING` 切换改为统一 `fade-only`（去掉尺寸补间动画），优先保证浮窗窗口层稳定与实机一致性。
+13. 录制态切换时序收敛：`NORMAL -> RECORDING` 改为“先淡出 -> 提层（remove/add）-> 切模式并淡入”，并将切换时长统一下调到 `130ms`。
+14. 为实测体感差异，当前临时回开“`fade + size`”组合（`width animateDpAsState + animateContentSize`，130ms）；若出现闪烁可快速回退到纯 `fade-only`。
+15. 面板高度策略收敛：面板高度目标按模式固定（`NORMAL/RECORDING/RUNNING`），不再依赖内容自适应高度推导，降低 `WRAP_CONTENT` 重算引发的闪烁风险。
+16. 面板窗口层策略收敛：采用“固定外层窗口容器 + 内部卡片宽高动画”，窗口层不再跟随内容尺寸逐帧变化，内部保留动画以兼顾稳定性与可感知过渡。
+17. relayout 策略限域：强制窗口 relayout 仅用于 `NORMAL -> RECORDING` 的 `restack` 场景，其它模式切换避免额外刷新，减少退出录制/退出运行时闪帧。
+18. 退出普通态动效收敛：`RECORDING/RUNNING -> NORMAL` 取消 fade，仅保留尺寸过渡；录制进入仍保留 fade + restack 特化路径。
 
 ## 1. 目标定义
 
@@ -560,3 +567,18 @@ interface ActionPlugin {
 60. 运行态节流尾部竞态收口（阶段二-稳定性）：
    - `TaskControlPanelGlobalOverlay.resetRunningTraceUiThrottle()` 增加对 `RUNNING_TRACE_UI_FLUSH` 的显式取消
    - 防止上一会话延迟刷新任务在下一会话触发，保证节流状态与运行会话边界一致
+61. 浮窗面板态切换与录制保存收口（阶段二-交互稳定）：
+   - 主面板 `panelMode` 切换改为“单树内容 + `animateContentSize`（220ms）”，替代 80ms `Crossfade`，在保留高度变化动画的同时降低切换生硬感
+   - `stopRecordingSessionAndPromptSave()` 展示保存卡片前统一恢复 settings overlay 可见与交互能力，修复“录制暂停后点击停止但保存弹窗未显示”的状态残留问题
+   - 停止录制新增 step/list 不一致告警日志，便于后续排查录制会话边缘态数据不一致
+   - 针对“切换时底部闪烁”问题，切换到“单树内容 + `animateContentSize`”路径：保留高度变化动画，同时避免 `AnimatedContent` 双内容叠加阶段的底部闪烁
+   - 主面板 overlay 窗口仅在 `panelMode` 切换期间临时锁定宽度（高度保持 `WRAP_CONTENT`），过渡后恢复完全自适应；将“窗口抖动控制”限定在动画窗口期，同时保持高度动画与真实内容一致
+   - NORMAL->RECORDING 过渡当前收敛为“先 `restack` 保证面板在录制遮罩之上 -> 切到 RECORDING 并执行高度动画（`animateContentSize`）”；该链路不再叠加 fade-out/fade-in，优先保证层级稳定与可读性
+   - 为抑制“底部逐步闪出”，NORMAL->RECORDING 过渡窗口期增加目标高度锁定（基于模式历史实测高度缓存），使 window 壳层高度稳定，避免系统窗口层 `WRAP_CONTENT` 逐帧补高
+   - 录制遮罩改为“先 `INVISIBLE` 挂载，待 panel `restack + mode switch` 完成后再 `VISIBLE`”，降低重排瞬间遮罩放大的闪帧感
+   - 新增 `recording_transition` 可观测日志：以 `rid + stage` 串起录制切换关键节点，并携带窗口/面板/capture 的尺寸与可见性快照，便于复现实机闪帧时快速定位发生阶段
+   - 基于实机 trace 将录制切换策略调整为“进入录制后保持窗口锁定，退出录制再解锁”，规避切换瞬间 `WRAP_CONTENT` 回退导致的尺寸抖动
+   - 在不改动锁窗稳定策略的前提下回补动效：主面板宽度使用 220ms 动画过渡，录制遮罩使用 180ms alpha 渐入，平衡“稳定不闪”与“切换不生硬”
+   - 录制进入链路改为“`restack` 后下一帧再切模式”，避免 detach/attach 同帧导致动画起点丢失；运行态切换统一走短时锁窗过渡，减少 NORMAL<->RUNNING 的底部闪烁与高度硬切
+   - 为避免固定窗口约束直接吞掉卡片动画，面板根节点改为“容器(`Box.wrapContentSize`) + 卡片”两层结构：窗口锁定作用在容器，卡片继续按模式执行宽高过渡
+   - 命中与拖拽边界改为读取卡片实测尺寸（`onGloballyPositioned`），确保窗口尺寸策略切换（临时锁定/恢复自适应）下手势交互仍与真实面板区域一致

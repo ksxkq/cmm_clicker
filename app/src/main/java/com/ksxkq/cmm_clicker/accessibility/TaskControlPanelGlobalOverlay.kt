@@ -16,7 +16,6 @@ import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.TextView
 import androidx.compose.animation.AnimatedVisibility as AnimatedVisibilityBox
-import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.MutableTransitionState
@@ -53,6 +52,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -179,12 +179,17 @@ class TaskControlPanelGlobalOverlay(
         private const val PANEL_DISMISS_DELAY_MS = 220L
         private const val RECORDING_SAVE_DIALOG_ENTER_DELAY_MS = 18L
         private const val RECORDING_SAVE_TO_START_CONFIRM_DELAY_MS = 220L
+        private const val PANEL_MODE_SWITCH_ANIMATION_MS = 130L
+        private const val CAPTURE_OVERLAY_FADE_IN_MS = 130L
+        private const val PANEL_WINDOW_FIXED_WIDTH_DP = 300
+        private const val PANEL_WINDOW_FIXED_HEIGHT_DP = 172
         private const val RUNNING_TRACE_UI_THROTTLE_MS = 80L
         private const val AUX_OVERLAY_SCRIM_ALPHA = 0.5f
         private const val AUX_OVERLAY_SCRIM_FADE_MS = 220
         private const val CLICK_PICKER_SCRIM_ALPHA = 0.08f
         private const val ACTION_LIST_MAX_VISIBLE_JUMP_LANES = 3
         private const val RUNTIME_REPORT_HISTORY_LIMIT = 80
+        private const val PANEL_WINDOW_TRANSITION_LOCK_MS = 260L
         private const val PANEL_VISIBILITY_TRACE_LIMIT = 180
     }
 
@@ -313,6 +318,41 @@ class TaskControlPanelGlobalOverlay(
     private var clickPickerY by mutableStateOf(0f)
     private var panelOffsetX by mutableIntStateOf(dp(18))
     private var panelOffsetY by mutableIntStateOf(dp(220))
+    private var panelMeasuredWidthPx = dp(188)
+    private var panelMeasuredHeightPx = dp(72)
+    private val panelMeasuredHeightByMode = mutableMapOf(
+        PanelMode.NORMAL to dp(
+            resolvePanelCardHeightDp(
+                panelMode = PanelMode.NORMAL,
+                panelDisplayMode = PanelDisplayMode.FULL,
+                runningMiniActive = false,
+            ),
+        ),
+        PanelMode.RECORDING to dp(
+            resolvePanelCardHeightDp(
+                panelMode = PanelMode.RECORDING,
+                panelDisplayMode = PanelDisplayMode.FULL,
+                runningMiniActive = false,
+            ),
+        ),
+        PanelMode.RUNNING to dp(
+            resolvePanelCardHeightDp(
+                panelMode = PanelMode.RUNNING,
+                panelDisplayMode = PanelDisplayMode.FULL,
+                runningMiniActive = false,
+            ),
+        ),
+    )
+    private var panelWindowSizeTransitionLocked by mutableStateOf(false)
+    private var panelWindowHeightTransitionLocked by mutableStateOf(false)
+    private var panelWindowTransitionLockWidthPx by mutableIntStateOf(dp(300))
+    private var panelWindowTransitionLockHeightPx by mutableIntStateOf(dp(120))
+    private var panelModeContentVisible by mutableStateOf(true)
+    private var recordingTransitionSeq = 0
+    private var activeRecordingTransitionId = 0
+    private var recordingTransitionLogUntilMs = 0L
+    private var lastRecordedTransitionMeasureWidth = -1
+    private var lastRecordedTransitionMeasureHeight = -1
     private var selectedTaskId by mutableStateOf(prefs.getString(KEY_SELECTED_TASK_ID, null))
     private var lastStartedTaskId by mutableStateOf(prefs.getString(KEY_LAST_STARTED_TASK_ID, null))
     private val recordedGestures = mutableListOf<RecordedGesture>()
@@ -371,6 +411,13 @@ class TaskControlPanelGlobalOverlay(
         )
         resetClickPickerState()
         panelMode = PanelMode.NORMAL
+        panelModeContentVisible = true
+        panelWindowSizeTransitionLocked = false
+        panelWindowHeightTransitionLocked = false
+        effectScheduler.cancel(TaskControlPanelEffectKey.PANEL_MODE_WINDOW_SIZE_UNLOCK)
+        effectScheduler.cancel(TaskControlPanelEffectKey.PANEL_MODE_RECORDING_RESTACK)
+        effectScheduler.cancel(TaskControlPanelEffectKey.PANEL_MODE_FADE_SWITCH)
+        effectScheduler.cancel(TaskControlPanelEffectKey.PANEL_MODE_LAYOUT_REFRESH)
         setPanelDisplayMode(
             mode = PanelDisplayMode.FULL,
             reason = "initialize_panel_state",
@@ -775,6 +822,7 @@ class TaskControlPanelGlobalOverlay(
             panelWindowFlags(),
             PixelFormat.RGBA_8888,
         ).apply {
+            applyPanelWindowSizePolicy(this)
             title = "TaskControlOverlay"
             gravity = Gravity.TOP or Gravity.START
             x = panelOffsetX
@@ -960,6 +1008,13 @@ class TaskControlPanelGlobalOverlay(
         recordingPaused = false
         replayingGesture = false
         panelMode = PanelMode.NORMAL
+        panelModeContentVisible = true
+        panelWindowSizeTransitionLocked = false
+        panelWindowHeightTransitionLocked = false
+        effectScheduler.cancel(TaskControlPanelEffectKey.PANEL_MODE_WINDOW_SIZE_UNLOCK)
+        effectScheduler.cancel(TaskControlPanelEffectKey.PANEL_MODE_RECORDING_RESTACK)
+        effectScheduler.cancel(TaskControlPanelEffectKey.PANEL_MODE_FADE_SWITCH)
+        effectScheduler.cancel(TaskControlPanelEffectKey.PANEL_MODE_LAYOUT_REFRESH)
         resetRunningPanelState()
         resetCurrentRunSession()
         pendingSettingsModalAction = null
@@ -1099,8 +1154,7 @@ class TaskControlPanelGlobalOverlay(
     private fun updateOverlayLayout() {
         val view = overlayView ?: return
         val params = layoutParams ?: return
-        params.width = WindowManager.LayoutParams.WRAP_CONTENT
-        params.height = WindowManager.LayoutParams.WRAP_CONTENT
+        applyPanelWindowSizePolicy(params)
         params.gravity = Gravity.TOP or Gravity.START
         params.x = panelOffsetX
         params.y = panelOffsetY
@@ -1110,10 +1164,147 @@ class TaskControlPanelGlobalOverlay(
             params = params,
             reason = "update_overlay_layout",
         )
+        logRecordingTransitionTrace(stage = "update_overlay_layout")
     }
 
     private fun touchUi() {
         uiRevision++
+    }
+
+    private fun beginRecordingTransitionTrace(reason: String) {
+        activeRecordingTransitionId = ++recordingTransitionSeq
+        recordingTransitionLogUntilMs = SystemClock.uptimeMillis() + 2_000L
+        lastRecordedTransitionMeasureWidth = -1
+        lastRecordedTransitionMeasureHeight = -1
+        logRecordingTransitionTrace(
+            stage = "trace.begin",
+            message = reason,
+            force = true,
+        )
+    }
+
+    private fun logRecordingTransitionTrace(
+        stage: String,
+        message: String = "",
+        force: Boolean = false,
+    ) {
+        if (!force && SystemClock.uptimeMillis() > recordingTransitionLogUntilMs) {
+            return
+        }
+        val params = layoutParams
+        val panel = overlayView
+        val capture = captureView
+        val details = buildString {
+            append("rid=").append(activeRecordingTransitionId)
+            append(" stage=").append(stage)
+            append(" mode=").append(panelMode.name)
+            append(" rec=").append(recording)
+            append(" display=").append(panelDisplayMode.name)
+            append(" measured=").append(panelMeasuredWidthPx).append("x").append(panelMeasuredHeightPx)
+            append(" lockWH=").append(panelWindowSizeTransitionLocked).append("/").append(panelWindowHeightTransitionLocked)
+            append(" lockSize=").append(panelWindowTransitionLockWidthPx).append("x").append(panelWindowTransitionLockHeightPx)
+            append(" lp=").append(params?.width ?: -1).append("x").append(params?.height ?: -1)
+            append(" lpXY=").append(params?.x ?: -1).append(",").append(params?.y ?: -1)
+            append(" panelAttached=").append(panel?.isAttachedToWindow == true)
+            append(" panelVis=").append(panel?.visibility ?: -1)
+            append(" captureAttached=").append(capture?.isAttachedToWindow == true)
+            append(" captureVis=").append(capture?.visibility ?: -1)
+            if (message.isNotBlank()) {
+                append(" msg=").append(message)
+            }
+        }
+        Log.d(TAG, "recording_transition $details")
+    }
+
+    private fun applyPanelWindowSizePolicy(
+        params: WindowManager.LayoutParams,
+    ) {
+        if (panelWindowSizeTransitionLocked) {
+            params.width = panelWindowTransitionLockWidthPx
+            params.height = if (panelWindowHeightTransitionLocked) {
+                panelWindowTransitionLockHeightPx
+            } else {
+                // Keep height adaptive to preserve real content height animation.
+                WindowManager.LayoutParams.WRAP_CONTENT
+            }
+        } else {
+            params.width = dp(PANEL_WINDOW_FIXED_WIDTH_DP)
+            params.height = dp(PANEL_WINDOW_FIXED_HEIGHT_DP)
+        }
+    }
+
+    private fun setPanelWindowSizeTransitionLocked(
+        locked: Boolean,
+        reason: String,
+    ) {
+        if (panelWindowSizeTransitionLocked == locked) {
+            return
+        }
+        panelWindowSizeTransitionLocked = locked
+        if (!locked) {
+            panelWindowHeightTransitionLocked = false
+        }
+        recordPanelVisibilityEvent(
+            event = "panel_window_size_lock",
+            reason = "$reason -> $locked",
+        )
+        logRecordingTransitionTrace(
+            stage = "window_size_lock",
+            message = "locked=$locked reason=$reason",
+        )
+        updateOverlayLayout()
+    }
+
+    private fun lockPanelWindowSizeForModeTransition(
+        reason: String,
+        targetMode: PanelMode,
+        lockDurationMs: Long? = PANEL_WINDOW_TRANSITION_LOCK_MS,
+        lockHeightToTarget: Boolean = false,
+    ) {
+        val targetWidthPx = dp(
+            resolvePanelCardWidthDp(
+                panelMode = targetMode,
+                panelDisplayMode = PanelDisplayMode.FULL,
+                runningMiniActive = false,
+            ),
+        )
+        panelWindowTransitionLockWidthPx = maxOf(panelMeasuredWidthPx, targetWidthPx)
+        if (lockHeightToTarget) {
+            val targetHeightPx = panelMeasuredHeightByMode[targetMode] ?: panelMeasuredHeightPx
+            panelWindowTransitionLockHeightPx = maxOf(
+                panelMeasuredHeightPx,
+                targetHeightPx.coerceAtLeast(1),
+            )
+            panelWindowHeightTransitionLocked = true
+        } else {
+            panelWindowHeightTransitionLocked = false
+        }
+        setPanelWindowSizeTransitionLocked(
+            locked = true,
+            reason = "panel_mode_transition_lock:$reason target=${targetMode.name}" +
+                " lockWidth=${panelWindowTransitionLockWidthPx}" +
+                if (panelWindowHeightTransitionLocked) {
+                    " lockHeight=${panelWindowTransitionLockHeightPx}"
+                } else {
+                    ""
+                },
+        )
+        if (lockDurationMs != null) {
+            effectScheduler.schedule(
+                key = TaskControlPanelEffectKey.PANEL_MODE_WINDOW_SIZE_UNLOCK,
+                delayMs = lockDurationMs,
+            ) {
+                setPanelWindowSizeTransitionLocked(
+                    locked = false,
+                    reason = "panel_mode_transition_unlock:$reason",
+                )
+                panelWindowHeightTransitionLocked = false
+                logRecordingTransitionTrace(
+                    stage = "window_size_unlock",
+                    message = "reason=$reason",
+                )
+            }
+        }
     }
 
     private fun touchUiForRunningTrace() {
@@ -1158,8 +1349,8 @@ class TaskControlPanelGlobalOverlay(
             return
         }
         val (screenWidth, screenHeight) = currentScreenSizePx()
-        val panelWidth = if (view.width > 0) view.width else dp(188)
-        val panelHeight = if (view.height > 0) view.height else dp(64)
+        val panelWidth = panelMeasuredWidthPx.coerceAtLeast(1)
+        val panelHeight = panelMeasuredHeightPx.coerceAtLeast(1)
         val maxX = (screenWidth - panelWidth).coerceAtLeast(0)
         val maxY = (screenHeight - panelHeight).coerceAtLeast(0)
         panelOffsetX = (panelOffsetX + deltaX.roundToInt()).coerceIn(0, maxX)
@@ -1702,6 +1893,14 @@ class TaskControlPanelGlobalOverlay(
             animationSpec = tween(durationMillis = 180),
             label = "control_panel_translate_y",
         )
+        val panelModeTransitionAlpha by animateFloatAsState(
+            targetValue = if (panelModeContentVisible) 1f else 0f,
+            animationSpec = tween(
+                durationMillis = PANEL_MODE_SWITCH_ANIMATION_MS.toInt(),
+                easing = FastOutSlowInEasing,
+            ),
+            label = "control_panel_mode_transition_alpha",
+        )
         val panelDragModifier = if (settingsVisible) {
             Modifier
         } else {
@@ -1715,32 +1914,69 @@ class TaskControlPanelGlobalOverlay(
                 }
             }
         }
-
-        Card(
-            modifier = Modifier
-                .width(
-                    resolvePanelCardWidthDp(
-                        panelMode = panelMode,
-                        panelDisplayMode = panelDisplayMode,
-                        runningMiniActive = runningMiniActive,
-                    ).dp,
-                )
-                .graphicsLayer {
-                    alpha = panelAlpha
-                    scaleX = panelScale
-                    scaleY = panelScale
-                    translationY = panelTranslateY
-                }
-                .then(panelDragModifier),
-            shape = RoundedCornerShape(14.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.background),
-            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        val panelWidth = resolvePanelCardWidthDp(
+            panelMode = panelMode,
+            panelDisplayMode = panelDisplayMode,
+            runningMiniActive = runningMiniActive,
+        ).dp
+        val panelHeight = resolvePanelCardHeightDp(
+            panelMode = panelMode,
+            panelDisplayMode = panelDisplayMode,
+            runningMiniActive = runningMiniActive,
+        ).dp
+        val panelAnimatedWidth by animateDpAsState(
+            targetValue = panelWidth,
+            animationSpec = tween(
+                durationMillis = PANEL_MODE_SWITCH_ANIMATION_MS.toInt(),
+                easing = FastOutSlowInEasing,
+            ),
+            label = "control_panel_width",
+        )
+        val panelAnimatedHeight by animateDpAsState(
+            targetValue = panelHeight,
+            animationSpec = tween(
+                durationMillis = PANEL_MODE_SWITCH_ANIMATION_MS.toInt(),
+                easing = FastOutSlowInEasing,
+            ),
+            label = "control_panel_height",
+        )
+        Box(
+            modifier = Modifier.wrapContentSize(Alignment.TopStart),
         ) {
-            Column(
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+            Card(
+                modifier = Modifier
+                    .width(panelAnimatedWidth)
+                    .height(panelAnimatedHeight)
+                    .graphicsLayer {
+                        alpha = panelAlpha * panelModeTransitionAlpha
+                        scaleX = panelScale
+                        scaleY = panelScale
+                        translationY = panelTranslateY
+                    }
+                    .onGloballyPositioned { coordinates ->
+                        val width = coordinates.size.width.coerceAtLeast(1)
+                        val height = coordinates.size.height.coerceAtLeast(1)
+                        panelMeasuredWidthPx = width
+                        panelMeasuredHeightPx = height
+                        panelMeasuredHeightByMode[panelMode] = height
+                        val shouldLogMeasure = SystemClock.uptimeMillis() <= recordingTransitionLogUntilMs &&
+                            (width != lastRecordedTransitionMeasureWidth || height != lastRecordedTransitionMeasureHeight)
+                        if (shouldLogMeasure) {
+                            lastRecordedTransitionMeasureWidth = width
+                            lastRecordedTransitionMeasureHeight = height
+                            logRecordingTransitionTrace(stage = "panel_measure")
+                        }
+                    }
+                    .then(panelDragModifier),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.background),
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
             ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                 if (panelDisplayMode == PanelDisplayMode.MINI) {
                     if (runningMiniActive) {
                         val runningMiniTransition = rememberInfiniteTransition(
@@ -1840,12 +2076,7 @@ class TaskControlPanelGlobalOverlay(
                         }
                     }
                 } else {
-                    Crossfade(
-                        targetState = panelMode,
-                        animationSpec = tween(durationMillis = 80, easing = FastOutSlowInEasing),
-                        label = "control_panel_mode",
-                    ) { mode ->
-                        when (mode) {
+                        when (panelMode) {
                         PanelMode.RECORDING -> {
                             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Row(
@@ -2088,8 +2319,8 @@ class TaskControlPanelGlobalOverlay(
                         }
                     }
                 }
+                }
             }
-        }
         }
 
         @Suppress("UNUSED_VARIABLE")
@@ -3016,7 +3247,11 @@ class TaskControlPanelGlobalOverlay(
 
     private fun beginRunningPanel(task: TaskRecord) {
         resetRunningTraceUiThrottle()
-        panelMode = PanelMode.RUNNING
+        panelModeContentVisible = true
+        transitionPanelModeWithFade(
+            targetMode = PanelMode.RUNNING,
+            reason = "begin_running_panel",
+        )
         setPanelHideReason(PanelHideReason.RUNNING_TEMP, hidden = false)
         setPanelDisplayMode(
             mode = PanelDisplayMode.FULL,
@@ -3255,7 +3490,11 @@ class TaskControlPanelGlobalOverlay(
                     )
                 }
                 if (panelMode == PanelMode.RUNNING) {
-                    panelMode = PanelMode.NORMAL
+                    transitionPanelModeWithFade(
+                        targetMode = PanelMode.NORMAL,
+                        reason = "running_finished_to_normal",
+                        useFade = false,
+                    )
                 }
                 if (runTaskJob === launchJob) {
                     runTaskJob = null
@@ -3335,6 +3574,7 @@ class TaskControlPanelGlobalOverlay(
             return
         }
         dismissSettingsModal(removeOverlayWhenIdle = !settingsVisible)
+        panelModeContentVisible = true
         recordingPaused = false
         replayingGesture = false
         recordedGestures.clear()
@@ -3371,8 +3611,19 @@ class TaskControlPanelGlobalOverlay(
             return
         }
         stopCaptureOverlay()
-        if (recordedGestures.isEmpty()) {
-            panelMode = PanelMode.NORMAL
+        val recordedGestureCount = recordedGestures.size
+        if (recordedGestureCount <= 0) {
+            if (recordedStepCount > 0) {
+                Log.w(
+                    TAG,
+                    "recording stop detected step/list mismatch: stepCount=$recordedStepCount gestureCount=$recordedGestureCount",
+                )
+            }
+            transitionPanelModeWithFade(
+                targetMode = PanelMode.NORMAL,
+                reason = "recording_stop_no_actions",
+                useFade = false,
+            )
             stopRecordingTicker(resetElapsed = true)
             statusText = "未录制到任何动作"
             touchUi()
@@ -3381,6 +3632,12 @@ class TaskControlPanelGlobalOverlay(
         stopRecordingTicker(resetElapsed = false)
         recordingSaveTaskName = buildDefaultRecordedTaskName()
         ensureSettingsOverlayView()
+        setSettingsOverlayInteractionEnabled(enabled = true)
+        setSettingsOverlayViewVisible(
+            visible = true,
+            reason = "stop_recording_prompt_save",
+        )
+        keepTransientSettingsOverlayAttached = false
         setPendingSettingsOverlayRemoval(
             pending = false,
             reason = "stop_recording_prompt_save",
@@ -3394,7 +3651,11 @@ class TaskControlPanelGlobalOverlay(
 
     private fun discardRecordingSession(message: String) {
         stopCaptureOverlay()
-        panelMode = PanelMode.NORMAL
+        transitionPanelModeWithFade(
+            targetMode = PanelMode.NORMAL,
+            reason = "recording_discard_to_normal",
+            useFade = false,
+        )
         recordingPaused = false
         replayingGesture = false
         dismissRecordingSaveDialogWithAnimation(removeOverlayWhenIdle = !settingsVisible)
@@ -3431,7 +3692,11 @@ class TaskControlPanelGlobalOverlay(
             lastStartedTaskId = saved.taskId
             persistIds()
             loadTasks()
-            panelMode = PanelMode.NORMAL
+            transitionPanelModeWithFade(
+                targetMode = PanelMode.NORMAL,
+                reason = "recording_save_to_normal",
+                useFade = false,
+            )
             recordingPaused = false
             replayingGesture = false
             dismissRecordingSaveDialogWithAnimation(removeOverlayWhenIdle = !settingsVisible)
@@ -3454,10 +3719,13 @@ class TaskControlPanelGlobalOverlay(
         if (recording) {
             return
         }
+        beginRecordingTransitionTrace(reason = "start_capture_overlay")
         val hintView = FrameLayout(context).apply {
             setBackgroundColor(Color.parseColor("#12000000"))
             isClickable = true
             isFocusable = true
+            alpha = 0f
+            visibility = View.INVISIBLE
         }
         val trailView = RecordingTrailOverlayView(context)
         hintView.addView(
@@ -3570,16 +3838,18 @@ class TaskControlPanelGlobalOverlay(
             recordingPaused = false
             resetCaptureGestureState()
             panelNeedsEntryAnimation = false
-            panelMode = PanelMode.RECORDING
             setPanelHideReason(PanelHideReason.RECORDING_INTERACTION, hidden = false)
             startRecordingTicker()
             statusText = "录制中，请在屏幕上执行手势"
-            touchUi()
-            restackControlPanelAboveCapture()
+            logRecordingTransitionTrace(stage = "capture_added")
+            transitionPanelFromNormalToRecording()
         } else {
+            effectScheduler.cancel(TaskControlPanelEffectKey.PANEL_MODE_RECORDING_RESTACK)
+            effectScheduler.cancel(TaskControlPanelEffectKey.PANEL_MODE_FADE_SWITCH)
             recording = false
             recordingPaused = false
             panelMode = PanelMode.NORMAL
+            panelModeContentVisible = true
             setPanelHideReason(PanelHideReason.RECORDING_INTERACTION, hidden = false)
             stopRecordingTicker(resetElapsed = true)
             statusText = "开启录制失败"
@@ -3587,20 +3857,154 @@ class TaskControlPanelGlobalOverlay(
         }
     }
 
+    private fun transitionPanelFromNormalToRecording() {
+        effectScheduler.cancel(TaskControlPanelEffectKey.PANEL_MODE_RECORDING_RESTACK)
+        effectScheduler.cancel(TaskControlPanelEffectKey.PANEL_MODE_FADE_SWITCH)
+        val shouldRunTransition = panelDisplayMode == PanelDisplayMode.FULL && panelMode == PanelMode.NORMAL
+        logRecordingTransitionTrace(
+            stage = "transition.begin",
+            message = "shouldRunTransition=$shouldRunTransition",
+        )
+        if (!shouldRunTransition) {
+            panelMode = PanelMode.RECORDING
+            panelModeContentVisible = true
+            touchUi()
+            setCaptureOverlayVisible(
+                visible = true,
+                reason = "start_capture_after_panel_transition_skip",
+            )
+            logRecordingTransitionTrace(stage = "transition.skip_done")
+            return
+        }
+        transitionPanelModeWithFade(
+            targetMode = PanelMode.RECORDING,
+            reason = "normal_to_recording",
+            forceRelayoutAfterSwitch = true,
+            beforeSwitch = {
+                logRecordingTransitionTrace(stage = "transition.restack_before_mode_switch")
+                restackControlPanelAboveCapture()
+            },
+        ) {
+            setCaptureOverlayVisible(
+                visible = true,
+                reason = "start_capture_after_panel_transition",
+            )
+            logRecordingTransitionTrace(stage = "transition.mode_switched")
+        }
+    }
+
+    private fun transitionPanelModeWithFade(
+        targetMode: PanelMode,
+        reason: String,
+        useFade: Boolean = true,
+        forceRelayoutAfterSwitch: Boolean = false,
+        beforeSwitch: () -> Unit = {},
+        afterSwitch: () -> Unit = {},
+    ) {
+        effectScheduler.cancel(TaskControlPanelEffectKey.PANEL_MODE_FADE_SWITCH)
+        val shouldAnimate = panelDisplayMode == PanelDisplayMode.FULL &&
+            panelMode != targetMode
+        if (!shouldAnimate) {
+            panelMode = targetMode
+            panelModeContentVisible = true
+            if (forceRelayoutAfterSwitch) {
+                requestPanelRelayoutAfterModeSwitch(reason = "mode_switch_skip:$reason")
+            }
+            afterSwitch()
+            touchUi()
+            return
+        }
+        if (!useFade) {
+            beforeSwitch()
+            panelMode = targetMode
+            panelModeContentVisible = true
+            if (forceRelayoutAfterSwitch) {
+                requestPanelRelayoutAfterModeSwitch(reason = "mode_switch_no_fade:$reason")
+            }
+            afterSwitch()
+            touchUi()
+            logRecordingTransitionTrace(
+                stage = "panel_mode_no_fade_switched",
+                message = "reason=$reason target=${targetMode.name}",
+            )
+            return
+        }
+        panelModeContentVisible = false
+        touchUi()
+        effectScheduler.schedule(
+            key = TaskControlPanelEffectKey.PANEL_MODE_FADE_SWITCH,
+            delayMs = PANEL_MODE_SWITCH_ANIMATION_MS,
+        ) {
+            beforeSwitch()
+            panelMode = targetMode
+            panelModeContentVisible = true
+            if (forceRelayoutAfterSwitch) {
+                requestPanelRelayoutAfterModeSwitch(reason = "mode_switch:$reason")
+            }
+            afterSwitch()
+            touchUi()
+            logRecordingTransitionTrace(
+                stage = "panel_mode_fade_switched",
+                message = "reason=$reason target=${targetMode.name}",
+            )
+        }
+    }
+
+    private fun requestPanelRelayoutAfterModeSwitch(reason: String) {
+        val panel = overlayView ?: return
+        panel.requestLayout()
+        updateOverlayLayout()
+        effectScheduler.cancel(TaskControlPanelEffectKey.PANEL_MODE_LAYOUT_REFRESH)
+        effectScheduler.schedule(
+            key = TaskControlPanelEffectKey.PANEL_MODE_LAYOUT_REFRESH,
+            delayMs = 16L,
+        ) {
+            if (overlayView !== panel || !panel.isAttachedToWindow) {
+                return@schedule
+            }
+            panel.requestLayout()
+            updateOverlayLayout()
+            logRecordingTransitionTrace(
+                stage = "panel_mode_layout_refresh",
+                message = reason,
+            )
+        }
+    }
+
     private fun restackControlPanelAboveCapture() {
         val panel = overlayView ?: return
         val params = layoutParams ?: return
         if (!panel.isAttachedToWindow) {
+            logRecordingTransitionTrace(
+                stage = "restack.skip_not_attached",
+                message = "panelAttached=false",
+            )
             return
         }
+        logRecordingTransitionTrace(stage = "restack.before")
         windowOps.tryRestackView(
             view = panel,
             params = params,
             reason = "restack_control_panel_above_capture",
         )
+        logRecordingTransitionTrace(stage = "restack.after")
     }
 
     private fun stopCaptureOverlay() {
+        effectScheduler.cancel(TaskControlPanelEffectKey.PANEL_MODE_RECORDING_RESTACK)
+        effectScheduler.cancel(TaskControlPanelEffectKey.PANEL_MODE_FADE_SWITCH)
+        effectScheduler.cancel(TaskControlPanelEffectKey.PANEL_MODE_LAYOUT_REFRESH)
+        effectScheduler.cancel(TaskControlPanelEffectKey.PANEL_MODE_WINDOW_SIZE_UNLOCK)
+        setPanelWindowSizeTransitionLocked(
+            locked = false,
+            reason = "stop_capture_overlay",
+        )
+        panelWindowHeightTransitionLocked = false
+        logRecordingTransitionTrace(stage = "stop_capture.begin", force = true)
+        setCaptureOverlayVisible(
+            visible = false,
+            reason = "stop_capture_overlay",
+        )
         captureView?.let { view ->
             windowOps.tryRemoveView(
                 view = view,
@@ -3612,9 +4016,11 @@ class TaskControlPanelGlobalOverlay(
         captureLayoutParams = null
         recording = false
         recordingPaused = false
+        panelModeContentVisible = true
         setPanelHideReason(PanelHideReason.RECORDING_INTERACTION, hidden = false)
         resetCaptureGestureState()
         touchUi()
+        logRecordingTransitionTrace(stage = "stop_capture.end", force = true)
     }
 
     private fun resetCaptureGestureState() {
@@ -3884,6 +4290,34 @@ class TaskControlPanelGlobalOverlay(
         )
     }
 
+    private fun setCaptureOverlayVisible(
+        visible: Boolean,
+        reason: String,
+    ) {
+        val view = captureView ?: return
+        view.animate().cancel()
+        val target = if (visible) View.VISIBLE else View.INVISIBLE
+        if (view.visibility == target && (!visible || view.alpha >= 0.99f)) {
+            return
+        }
+        if (visible) {
+            view.alpha = 0f
+            view.visibility = View.VISIBLE
+            view.animate()
+                .alpha(1f)
+                .setDuration(CAPTURE_OVERLAY_FADE_IN_MS)
+                .start()
+        } else {
+            view.alpha = 0f
+            view.visibility = View.INVISIBLE
+        }
+        logRecordingTransitionTrace(
+            stage = "capture_overlay_visibility",
+            message = "reason=$reason visible=$visible",
+            force = true,
+        )
+    }
+
     private fun toRecordedStroke(
         track: PointerTrack,
         sessionStartMs: Long,
@@ -3939,8 +4373,8 @@ class TaskControlPanelGlobalOverlay(
     }
 
     private fun isTouchWithinPanel(rawX: Float, rawY: Float): Boolean {
-        val panelWidth = (overlayView?.width ?: dp(188)).coerceAtLeast(1)
-        val panelHeight = (overlayView?.height ?: dp(72)).coerceAtLeast(1)
+        val panelWidth = panelMeasuredWidthPx.coerceAtLeast(1)
+        val panelHeight = panelMeasuredHeightPx.coerceAtLeast(1)
         val left = panelOffsetX
         val top = panelOffsetY
         val right = left + panelWidth

@@ -1,6 +1,6 @@
 # cmm_clicker 执行日志（持续维护）
 
-更新时间：2026-03-02
+更新时间：2026-03-05
 
 ## 1. 当前目标
 
@@ -727,6 +727,90 @@
 658. 关闭闪烁八次优化（渲染竞态收口）：移除 overlay 与 settings overlay 的 `ComposeView.setLayerType(HARDWARE)` 强制硬件层，避免 full-screen overlay 在可见性切换时触发层重建闪帧。
 659. 关闭闪烁九次优化（动画尾帧收口）：开始任务确认弹窗在 `settingsModalTransitionState` 退出 `idle` 后，先等待下一帧（`withFrameNanos`）再隐藏临时 overlay，避免同帧“动画结束 + View 隐藏”导致的尾帧闪烁。
 660. 稳定性验证：以上“硬件层移除 + 下一帧收口”改造后再次通过 `:app:compileDebugKotlin` 与 `testDebugUnitTest`。
+661. 浮窗面板状态切换动效优化：`panelMode` 从 80ms `Crossfade` 升级为 `AnimatedContent`（fade + vertical slide + `SizeTransform`），统一 NORMAL/RECORDING/RUNNING 的切换节奏，降低“硬切感”。
+662. 录制停止保存弹窗可见性修复：`stopRecordingSessionAndPromptSave()` 在展示保存卡片前显式恢复 settings overlay 可见/可交互，并清理临时保留标记，避免弹层被上一次临时隐藏状态吞掉（表现为“点击停止无保存提示”）。
+663. 录制收口可观测性补齐：在停止录制时新增 step/list 不一致告警日志（`stepCount` 与 `recordedGestures.size`），便于后续排查“有步数但无可保存动作”的边缘态；本轮改造后再次通过 `:app:compileDebugKotlin` 与 `testDebugUnitTest`。
+664. 浮窗面板切换闪烁修复：`AnimatedContent` 去除垂直位移动画，尺寸过渡改为 `SizeTransform(clip=true, duration=1ms)`，避免 NORMAL->RECORDING 等切换时卡片高度缓慢拉伸导致的底部闪烁。
+665. 稳定性验证：以上“面板尺寸过渡收敛”改造后再次通过 `:app:compileDebugKotlin` 与 `testDebugUnitTest`。
+666. 面板高度动画方案重构：将 `panelMode` 切换从“`AnimatedContent` 双内容过渡”改为“单树 `when(panelMode)` + 卡片 `animateContentSize(220ms)`”，保留高度变化动画，避免双内容叠加阶段在底部区域产生闪烁。
+667. 稳定性验证：以上“单树高度动画”改造后再次通过 `:app:compileDebugKotlin` 与 `testDebugUnitTest`。
+668. 浮窗窗口尺寸抖动收敛：主面板 overlay 窗口改为固定尺寸（`300dp x 220dp`），不再随内容高度动画每帧更新 `WindowManager.LayoutParams`，降低 `WRAP_CONTENT` 下窗口重布局引发的底部闪烁概率。
+669. 命中与拖拽精度修复：新增卡片实测尺寸缓存（`panelMeasuredWidthPx/panelMeasuredHeightPx`），通过 `onGloballyPositioned` 同步真实面板尺寸，`isTouchWithinPanel()` 与拖拽边界改为基于真实卡片尺寸，避免固定窗口后触摸区域偏大。
+670. 稳定性验证：以上“固定窗口尺寸 + 实测尺寸命中”改造后再次通过 `:app:compileDebugKotlin` 与 `testDebugUnitTest`。
+671. 面板窗口尺寸策略调整：取消“常驻固定窗口尺寸”，改为“仅在 `panelMode` 切换动画期间临时锁定窗口尺寸（`300dp x 220dp`）”，动画结束（260ms）后恢复 `WRAP_CONTENT`，兼顾自适应布局与窗口重布局抖动控制。
+672. 状态切换锁定调度接线：新增 `PANEL_MODE_WINDOW_SIZE_UNLOCK` 调度键，并在 `OverlayContent` 监听 `panelMode` 变化时触发锁定/解锁；`initialize/removeOverlay` 同步清理锁定态与 pending 解锁任务，避免跨会话残留。
+673. 稳定性验证：以上“仅动画期临时锁定窗口尺寸”改造后再次通过 `:app:compileDebugKotlin` 与 `testDebugUnitTest`。
+674. NORMAL->RECORDING 过渡重排时序重构：切换录制时改为“先锁窗口到目标尺寸并切换到 RECORDING + 内容 fade-out”，在 alpha=0 阶段执行 `restackControlPanelAboveCapture()`（remove/add 提升层级），随后内容 fade-in，避免层级重排与可见动画同帧叠加。
+675. 模式切换锁定策略下沉：`lockPanelWindowSizeForModeTransition(reason, targetMode)` 改为按目标模式动态计算锁定尺寸（基于目标宽度与估算高度），替代固定常量；新增 `PANEL_MODE_RECORDING_RESTACK` 调度键承接“fade-out 后重排”。
+676. 稳定性验证：以上“录制切换重排时序 + 动态锁定尺寸”改造后再次通过 `:app:compileDebugKotlin` 与 `testDebugUnitTest`。
+677. NORMAL->RECORDING 过渡时长统一：将模式切换透明动画统一为 `220ms`，并与卡片 `animateContentSize(220ms)` 对齐，避免 140ms 提前重排打断高度动画导致的“高度先动后跳变”。
+678. 模式切换透明层级调整：`panelMode` 切换时的 alpha 作用范围由“仅内容层”提升为“整张面板卡片层（含背景/边框）”，严格在 alpha=0 时执行 `restack`，降低窗口重排可见帧带来的底部闪烁感。
+679. 稳定性验证：以上“切换时长对齐 + 整卡片淡出重排”改造后再次通过 `:app:compileDebugKotlin` 与 `:app:testDebugUnitTest`。
+680. 面板过渡窗口策略微调：`panelMode` 切换期改为“仅锁定 window 宽度，window 高度保持 `WRAP_CONTENT`”，修复“过渡期高度明显大于录制面板实际高度”的视觉偏差。
+681. 高度动画可见性恢复：去掉切换期固定 window 高度后，面板高度过渡重新由卡片真实内容驱动（`animateContentSize`），避免窗口壳层高度先行导致的“看不到变高动画”问题。
+682. 稳定性验证：以上“仅锁宽度 + 高度自适应”改造后再次通过 `:app:compileDebugKotlin`。
+683. 稳定性验证补齐：上述改造继续通过 `:app:testDebugUnitTest`，未引入单测回归。
+684. NORMAL->RECORDING 二段式收口修复：`restack` 与 `fade-in` 解耦，`alpha=0` 执行 `restack` 后新增 48ms 稳定窗口，再触发淡入，避免“淡入完成后底部继续一点点闪出”的可见重布局尾帧。
+685. 过渡锁宽时长覆盖完整链路：新增 `PANEL_WINDOW_TRANSITION_LOCK_RECORDING_MS`，将锁宽持续到“淡出 + restack settle + 淡入”全周期，避免中途解锁触发二次布局抖动。
+686. 调度清理补齐：新增 `PANEL_MODE_RECORDING_FADE_IN` 调度键，并在初始化、overlay 移除、录制启动失败、录制结束时统一取消，防止跨会话延迟任务污染下一次过渡。
+687. 稳定性验证：以上“二段式收口 + 锁宽时长覆盖全周期”改造后再次通过 `:app:compileDebugKotlin` 与 `:app:testDebugUnitTest`。
+688. 底部渐进闪烁继续收敛：在 `restack` 前新增“按当前实测值临时锁定 window 高度”策略（仅在宽度锁期间有效），避免重挂载后 `WRAP_CONTENT` 再次逐帧补高导致底部一点点显现。
+689. 过渡锁释放兜底：`setPanelWindowSizeTransitionLocked(false, ...)` 统一清理高度锁标记；录制结束路径同步清理，防止高度锁跨场景残留。
+690. 稳定性验证：以上“restack 前短时锁定实测高度”改造后再次通过 `:app:compileDebugKotlin` 与 `:app:testDebugUnitTest`。
+691. 录制切换链路回退收敛：为消除“录制面板长期半透明”问题，NORMAL->RECORDING 改为“先立即 `restackControlPanelAboveCapture()` 保证层级，再执行模式切换与高度动画”，移除该链路上的 fade-out/fade-in 调度。
+692. 切换锁定窗口策略简化：录制切换仅保留短时锁宽（`PANEL_MODE_SWITCH_ANIMATION_MS + 80ms`），不再叠加“重排后再淡入”的额外阶段，降低状态中断概率。
+693. 代码收口：清理已废弃的录制过渡常量/函数（`PANEL_MODE_RESTACK_SETTLE_MS`、`PANEL_WINDOW_TRANSITION_LOCK_RECORDING_MS`、`lockPanelWindowHeightToMeasured`），减少后续维护噪音。
+694. 稳定性验证：以上“录制切换回退为层级先行 + 尺寸动画”改造后再次通过 `:app:compileDebugKotlin` 与 `:app:testDebugUnitTest`。
+695. 底部逐步闪烁定点收敛：为 NORMAL->RECORDING 切换增加“目标高度短时锁定”策略；过渡期间 window 高度固定为 `max(当前实测高度, 目标模式实测高度/估算高度)`，避免 `WRAP_CONTENT` 在窗口层逐帧补高。
+696. 目标高度来源完善：新增 `panelMeasuredHeightByMode` 缓存（NORMAL/RECORDING/RUNNING），在 `onGloballyPositioned` 实时回填；优先使用同模式历史实测高度锁定，首次切换使用保底估算值。
+697. 稳定性验证：以上“锁宽 + 锁目标高（仅录制切换）”改造后再次通过 `:app:compileDebugKotlin` 与 `:app:testDebugUnitTest`。
+698. 单次闪烁继续收敛：录制遮罩 `captureView` 改为先 `INVISIBLE` addView，待面板完成 `restack` 与模式切换后再置 `VISIBLE`，避免 `remove/add` 瞬间被半透明遮罩放大成“闪一下”。
+699. 过渡顺序优化：`transitionPanelFromNormalToRecording()` 调整为“先 `restack` 再锁窗尺寸与切模式”，避免先切高再重排导致的视觉中断。
+700. 可观测性补齐：新增 `capture_overlay_visibility` 调试日志，便于后续复现时确认遮罩显隐时序。
+701. 稳定性验证：以上“遮罩延后可见 + 重排前置”改造后再次通过 `:app:compileDebugKotlin` 与 `:app:testDebugUnitTest`。
+702. 录制切换时序 trace 增强：新增 `recording_transition` 日志链路（`rid`、`stage`、`panelMode`、实测尺寸、window lock 状态、`LayoutParams` 尺寸/坐标、panel/capture attach 与 visibility），覆盖 `startCaptureOverlay`、`transitionPanelFromNormalToRecording`、`restack`、`updateOverlayLayout`、window lock/unlock、capture 显隐与 stop 收口。
+703. 实测尺寸变化日志接线：`onGloballyPositioned` 在录制切换 trace 窗口（2s）内按尺寸变化输出 `panel_measure`，用于对齐“底部逐步闪出”发生前后的高度变化序列。
+704. 稳定性验证：以上“录制切换细粒度日志”改造后再次通过 `:app:compileDebugKotlin` 与 `:app:testDebugUnitTest`。
+705. 日志定位结论：实机复现显示 `normal_to_recording` 解锁回 `WRAP_CONTENT` 时出现尺寸回退链路（`666x312 -> 558x150 -> 666x226`），确认“闪一下”由解锁瞬间的窗口层重算导致。
+706. 录制态窗口锁定策略调整：`lockPanelWindowSizeForModeTransition(...)` 支持 `lockDurationMs=null`（保持锁定不自动解锁）；NORMAL->RECORDING 切换改为进入录制后持续锁定窗口尺寸，直到 `stopCaptureOverlay()` 再统一解锁，避免录制开始瞬间回退到旧尺寸。
+707. 目标高度基线修正：`panelMeasuredHeightByMode` 的初始 NORMAL/RECORDING 高度下调为更接近实测的 `50dp/76dp`，减少首次切换时锁高过大导致的冗余空间。
+708. 录制停止收口补齐：`stopCaptureOverlay()` 显式取消 `PANEL_MODE_WINDOW_SIZE_UNLOCK` 并调用 `setPanelWindowSizeTransitionLocked(false, "stop_capture_overlay")`，确保录制态锁窗不会跨场景残留。
+709. 稳定性验证：以上“日志定位后策略修正”改造后再次通过 `:app:compileDebugKotlin` 与 `:app:testDebugUnitTest`。
+710. 录制切换动效回补：主面板宽度从“模式切换瞬时更新”改为 `animateDpAsState(220ms)` 平滑过渡，避免“无动画直接跳到录制宽度”的生硬感。
+711. 录制遮罩淡入动效回补：`captureView` 显示时增加 `alpha 0 -> 1`（180ms）渐入，补齐“录制半透明背景没有动画”的体验缺口；隐藏路径仍保持即时收口，避免影响当前稳定性。
+712. 稳定性验证：以上“面板宽度动画 + 录制遮罩淡入”改造后再次通过 `:app:compileDebugKotlin` 与 `:app:testDebugUnitTest`。
+713. 录制进入动画基线修正：NORMAL->RECORDING 链路改为“`restack` 后下一帧（16ms）再切 `panelMode`”，并将遮罩显示放到模式切换后触发，避免 detach/attach 同帧导致面板宽度动画起点丢失（表现为“进入录制无动画”）。
+714. 运行态切换过渡补齐：新增 `transitionPanelModeWithWindowLock(...)`，在 NORMAL<->RUNNING 切换时统一接入短时锁窗（`220ms + 80ms`，含高度锁定），降低 `WRAP_CONTENT` 直接切换引发的底部闪烁与高度硬切。
+715. 运行态目标高度基线调整：`panelMeasuredHeightByMode` 的 RUNNING 初始值调整为 `138dp`，更贴近当前运行面板实测高度，减少首次切换时过度锁高。
+716. 稳定性验证：以上“录制进入基线修正 + 运行态过渡补齐”改造后再次通过 `:app:compileDebugKotlin` 与 `:app:testDebugUnitTest`。
+717. 日志复盘结论：`recording_transition` 显示切换期窗口锁定时（`lp=666x228`）卡片测量也被强制为锁定尺寸，导致进入态动画被吞；根因是顶层直接以 `Card` 作为根节点，固定窗口约束直接传递到卡片。
+718. 渲染结构修正：`OverlayContent` 改为“顶层 `Box(wrapContentSize(TopStart))` + 内层 `Card`”结构，由容器承接窗口锁定约束，卡片保留自身宽高动画空间，恢复录制/运行切换时的可见过渡。
+719. 稳定性验证：以上“根节点容器化避免动画被窗口锁吞没”改造后再次通过 `:app:compileDebugKotlin` 与 `:app:testDebugUnitTest`。
+720. 面板模式切换收敛为 `fade-only`：移除主面板 `panelMode` 切换时的宽度补间与 `animateContentSize` 高度补间，模式变化改为统一内容淡出后切换模式再淡入，避免 `WRAP_CONTENT` 高度联动导致的底部闪烁。
+721. 模式切换调度键统一：`TaskControlPanelEffectKey` 将旧的 `PANEL_MODE_RECORDING_FADE_IN` 重命名并统一为 `PANEL_MODE_FADE_SWITCH`，NORMAL<->RECORDING 与 NORMAL<->RUNNING 共用同一套切换调度。
+722. 录制收口链路接线同步：录制停止（无动作/丢弃/保存）恢复普通面板时统一复用 `transitionPanelModeWithFade(...)`，避免不同出口的面板切换表现不一致。
+723. 稳定性验证：以上“fade-only 模式切换收敛”改造后通过 `:app:compileDebugKotlin`、`:app:testDebugUnitTest` 与 `:app:assembleDebug`。
+724. 面板模式切换提速：`PANEL_MODE_SWITCH_ANIMATION_MS` 从 `220ms` 下调至 `130ms`，并同步缩短录制遮罩淡入时长（`CAPTURE_OVERLAY_FADE_IN_MS=130ms`），降低切换拖沓感。
+725. 录制切换按“先淡出再提层”收敛：`NORMAL -> RECORDING` 改为先将面板 alpha 淡到最低，再执行 `restackControlPanelAboveCapture()`（remove/add 提层），最后切到 `RECORDING` 并淡入，减少提层过程可见闪帧。
+726. 模式切换扩展点补齐：`transitionPanelModeWithFade(...)` 新增 `beforeSwitch` 回调，支持在淡出完成后执行窗口层级/副作用，再统一进入目标模式并淡入。
+727. 稳定性验证：以上“加速 + 录制切换先淡出再提层”改造后再次通过 `:app:compileDebugKotlin`、`:app:testDebugUnitTest` 与 `:app:assembleDebug`。
+728. 修复“切到录制后仅显示旧尺寸区域”问题：在模式切换完成后新增 `requestPanelRelayoutAfterModeSwitch(...)`，执行“立即 `requestLayout + updateOverlayLayout` + 下一帧(16ms)再刷新”，确保 `restack(remove/add)` 后窗口尺寸按新面板内容重新测量。
+729. 调度管理补齐：新增 `PANEL_MODE_LAYOUT_REFRESH` 调度键，并在初始化/移除/录制停止路径统一取消，避免延迟刷新跨会话触发。
+730. 稳定性验证：以上“模式切换后强制 relayout”修复后再次通过 `:app:compileDebugKotlin`、`:app:testDebugUnitTest` 与 `:app:assembleDebug`。
+731. 按产品反馈恢复面板 size 动画用于实测：在保留 `fade` 与 `restack` 时序的前提下，面板切换重新接入 `width animateDpAsState + Card.animateContentSize`（时长 `130ms`），用于评估“仅 fade”与“fade+size”体感差异。
+732. 稳定性验证：以上“恢复 size 动画实测版”改造后再次通过 `:app:compileDebugKotlin`、`:app:testDebugUnitTest` 与 `:app:assembleDebug`。
+733. 按交互反馈切换为“固定高度”方案：新增 `resolvePanelCardHeightDp(...)`，`FULL` 模式下 `NORMAL/RECORDING/RUNNING` 高度固定为 `50/76/138dp`，`MINI` 模式下固定为 `52/98dp`（普通/运行）。
+734. 渲染策略调整：面板卡片从“`animateContentSize` 高度补间”改为“固定 `height(panelHeight)`”，保留宽度动画与 fade，消除高度动画触发的 `WRAP_CONTENT` 窗口逐帧重算抖动。
+735. 稳定性验证：以上“固定高度 + 宽度动画”改造后再次通过 `:app:compileDebugKotlin`、`:app:testDebugUnitTest` 与 `:app:assembleDebug`。
+736. 按新交互方向切换为“固定外窗容器 + 内部继续动画”：`applyPanelWindowSizePolicy(...)` 在非锁定态改为固定窗口尺寸 `300x172dp`，不再使用 `WRAP_CONTENT` 跟随内容逐帧变化。
+737. 高度动画回补：在固定窗口容器内，面板卡片高度改为 `animateDpAsState`（130ms）过渡，宽度动画与 fade 保持不变，实现“有高度动画但窗口层不抖动”。
+738. 稳定性验证：以上“固定外窗 + 内部宽高动画”改造后再次通过 `:app:compileDebugKotlin`、`:app:testDebugUnitTest` 与 `:app:assembleDebug`。
+739. 闪烁链路收敛：`transitionPanelModeWithFade(...)` 的强制 `requestPanelRelayoutAfterModeSwitch(...)` 改为按开关触发，仅在 `NORMAL -> RECORDING`（含 `restack`）路径启用，避免 `RECORDING -> NORMAL` 与 `RUNNING -> NORMAL` 的额外窗口刷新闪帧。
+740. 稳定性验证：以上“强制 relayout 限域”改造后再次通过 `:app:compileDebugKotlin`、`:app:testDebugUnitTest` 与 `:app:assembleDebug`。
+741. 日志复盘结论：`RECORDING -> NORMAL` 与 `RUNNING -> NORMAL` 闪烁阶段未出现 `restack(remove/add)`，主要发生在“状态切换 fade + 尺寸收缩并行”窗口。
+742. 退出 NORMAL 过渡策略收敛：`recording_stop_no_actions/recording_discard_to_normal/recording_save_to_normal/running_finished_to_normal` 改为 `useFade=false`，仅保留尺寸过渡，减少退出阶段亮度闪烁感。
+743. 保留录制进入特化：`NORMAL -> RECORDING` 仍维持“先淡出 -> restack -> 淡入”与强制 relayout，确保层级正确和首帧完整显示。
+744. 稳定性验证：以上“退出 NORMAL 去 fade”改造后再次通过 `:app:compileDebugKotlin`、`:app:testDebugUnitTest` 与 `:app:assembleDebug`。
 
 ## 3. 正在进行
 

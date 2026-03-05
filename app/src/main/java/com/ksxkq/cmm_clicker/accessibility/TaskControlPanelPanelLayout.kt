@@ -6,13 +6,7 @@ internal fun resolvePanelCardWidthDp(
     runningMiniActive: Boolean,
 ): Int {
     return when (panelDisplayMode) {
-        PanelDisplayMode.MINI -> {
-            if (runningMiniActive) {
-                216
-            } else {
-                150
-            }
-        }
+        PanelDisplayMode.MINI -> 28
 
         PanelDisplayMode.FULL -> {
             when (panelMode) {
@@ -30,13 +24,7 @@ internal fun resolvePanelCardHeightDp(
     runningMiniActive: Boolean,
 ): Int {
     return when (panelDisplayMode) {
-        PanelDisplayMode.MINI -> {
-            if (runningMiniActive) {
-                98
-            } else {
-                52
-            }
-        }
+        PanelDisplayMode.MINI -> 56
 
         PanelDisplayMode.FULL -> {
             when (panelMode) {

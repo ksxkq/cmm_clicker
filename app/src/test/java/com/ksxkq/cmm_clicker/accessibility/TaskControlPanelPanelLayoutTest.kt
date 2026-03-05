@@ -6,9 +6,9 @@ import org.junit.Test
 class TaskControlPanelPanelLayoutTest {
 
     @Test
-    fun `resolvePanelCardWidthDp returns mini width for running and non running mini`() {
+    fun `resolvePanelCardWidthDp returns unified mini width`() {
         assertEquals(
-            216,
+            28,
             resolvePanelCardWidthDp(
                 panelMode = PanelMode.RUNNING,
                 panelDisplayMode = PanelDisplayMode.MINI,
@@ -16,8 +16,28 @@ class TaskControlPanelPanelLayoutTest {
             ),
         )
         assertEquals(
-            150,
+            28,
             resolvePanelCardWidthDp(
+                panelMode = PanelMode.NORMAL,
+                panelDisplayMode = PanelDisplayMode.MINI,
+                runningMiniActive = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `resolvePanelCardHeightDp returns unified mini height`() {
+        assertEquals(
+            56,
+            resolvePanelCardHeightDp(
+                panelMode = PanelMode.RUNNING,
+                panelDisplayMode = PanelDisplayMode.MINI,
+                runningMiniActive = true,
+            ),
+        )
+        assertEquals(
+            56,
+            resolvePanelCardHeightDp(
                 panelMode = PanelMode.NORMAL,
                 panelDisplayMode = PanelDisplayMode.MINI,
                 runningMiniActive = false,

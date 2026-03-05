@@ -1,5 +1,8 @@
 package com.ksxkq.cmm_clicker.accessibility
 
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
+import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
@@ -13,15 +16,16 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import android.view.animation.DecelerateInterpolator
 import android.widget.FrameLayout
 import android.widget.TextView
 import androidx.compose.animation.AnimatedVisibility as AnimatedVisibilityBox
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
@@ -56,6 +60,7 @@ import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.FiberManualRecord
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -75,6 +80,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Recomposer
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -173,6 +179,8 @@ class TaskControlPanelGlobalOverlay(
         private const val PREF_NAME = "task_control_overlay"
         private const val KEY_SELECTED_TASK_ID = "selected_task_id"
         private const val KEY_LAST_STARTED_TASK_ID = "last_started_task_id"
+        private const val KEY_MINI_PANEL_X_RATIO = "mini_panel_x_ratio"
+        private const val KEY_MINI_PANEL_Y_RATIO = "mini_panel_y_ratio"
         private const val SETTINGS_SHEET_ENTER_DELAY_MS = 16L
         private const val SETTINGS_DISMISS_DELAY_MS = 200L
         private const val PANEL_ENTRY_DELAY_MS = 18L
@@ -183,6 +191,7 @@ class TaskControlPanelGlobalOverlay(
         private const val CAPTURE_OVERLAY_FADE_IN_MS = 130L
         private const val PANEL_WINDOW_FIXED_WIDTH_DP = 300
         private const val PANEL_WINDOW_FIXED_HEIGHT_DP = 172
+        private const val PANEL_MINI_SNAP_ANIMATION_MS = 180L
         private const val RUNNING_TRACE_UI_THROTTLE_MS = 80L
         private const val AUX_OVERLAY_SCRIM_ALPHA = 0.5f
         private const val AUX_OVERLAY_SCRIM_FADE_MS = 220
@@ -191,6 +200,8 @@ class TaskControlPanelGlobalOverlay(
         private const val RUNTIME_REPORT_HISTORY_LIMIT = 80
         private const val PANEL_WINDOW_TRANSITION_LOCK_MS = 260L
         private const val PANEL_VISIBILITY_TRACE_LIMIT = 180
+        private const val DEFAULT_MINI_PANEL_X_RATIO = 0f
+        private const val DEFAULT_MINI_PANEL_Y_RATIO = 0.36f
     }
 
     private data class RecordedStroke(
@@ -316,8 +327,20 @@ class TaskControlPanelGlobalOverlay(
     private var clickPickerNodeId by mutableStateOf<String?>(null)
     private var clickPickerX by mutableStateOf(0f)
     private var clickPickerY by mutableStateOf(0f)
-    private var panelOffsetX by mutableIntStateOf(dp(18))
-    private var panelOffsetY by mutableIntStateOf(dp(220))
+    private var fullPanelOffsetX by mutableIntStateOf(dp(18))
+    private var fullPanelOffsetY by mutableIntStateOf(dp(220))
+    private var miniPanelXRatio by mutableFloatStateOf(
+        prefs.getFloat(KEY_MINI_PANEL_X_RATIO, DEFAULT_MINI_PANEL_X_RATIO).coerceIn(0f, 1f),
+    )
+    private var miniPanelYRatio by mutableFloatStateOf(
+        prefs.getFloat(KEY_MINI_PANEL_Y_RATIO, DEFAULT_MINI_PANEL_Y_RATIO).coerceIn(0f, 1f),
+    )
+    private var miniPanelOffsetX by mutableIntStateOf(0)
+    private var miniPanelOffsetY by mutableIntStateOf(0)
+    private var panelOffsetX by mutableIntStateOf(fullPanelOffsetX)
+    private var panelOffsetY by mutableIntStateOf(fullPanelOffsetY)
+    private var panelDragging by mutableStateOf(false)
+    private var panelSnapAnimator: ValueAnimator? = null
     private var panelMeasuredWidthPx = dp(188)
     private var panelMeasuredHeightPx = dp(72)
     private val panelMeasuredHeightByMode = mutableMapOf(
@@ -418,6 +441,7 @@ class TaskControlPanelGlobalOverlay(
         effectScheduler.cancel(TaskControlPanelEffectKey.PANEL_MODE_RECORDING_RESTACK)
         effectScheduler.cancel(TaskControlPanelEffectKey.PANEL_MODE_FADE_SWITCH)
         effectScheduler.cancel(TaskControlPanelEffectKey.PANEL_MODE_LAYOUT_REFRESH)
+        cancelPanelSnapAnimator()
         setPanelDisplayMode(
             mode = PanelDisplayMode.FULL,
             reason = "initialize_panel_state",
@@ -516,16 +540,159 @@ class TaskControlPanelGlobalOverlay(
     private fun setPanelDisplayMode(
         mode: PanelDisplayMode,
         reason: String,
+        snapOnMiniEnter: Boolean = true,
+        miniOffsetOverride: Pair<Int, Int>? = null,
     ) {
+        val currentMode = panelDisplayMode
+        if (currentMode == mode) {
+            return
+        }
+        syncStoredOffsetForMode(
+            mode = currentMode,
+            persistMiniRatio = currentMode == PanelDisplayMode.MINI,
+        )
         val changed = dispatchPanelVisibilityEvent(
             PanelVisibilityEvent.SetDisplayMode(mode = mode),
         )
         if (!changed) {
             return
         }
+        restoreOffsetForMode(
+            mode = mode,
+            reason = "display_mode_switch:$reason",
+            miniOffsetOverride = miniOffsetOverride,
+        )
+        panelDragging = false
         recordPanelVisibilityEvent(
             event = "panel_display_mode",
             reason = "$reason -> ${mode.name}",
+        )
+        if (mode == PanelDisplayMode.MINI && snapOnMiniEnter) {
+            snapPanelToHorizontalEdge(
+                animated = true,
+                reason = "enter_mini:$reason",
+            )
+        }
+    }
+
+    private fun syncStoredOffsetForMode(
+        mode: PanelDisplayMode,
+        persistMiniRatio: Boolean,
+    ) {
+        when (mode) {
+            PanelDisplayMode.FULL -> {
+                fullPanelOffsetX = panelOffsetX
+                fullPanelOffsetY = panelOffsetY
+            }
+
+            PanelDisplayMode.MINI -> {
+                miniPanelOffsetX = panelOffsetX
+                miniPanelOffsetY = panelOffsetY
+                if (persistMiniRatio) {
+                    persistMiniPanelRatio(reason = "sync_stored_offset")
+                }
+            }
+        }
+    }
+
+    private fun restoreOffsetForMode(
+        mode: PanelDisplayMode,
+        reason: String,
+        miniOffsetOverride: Pair<Int, Int>? = null,
+    ) {
+        val (targetX, targetY) = when (mode) {
+            PanelDisplayMode.FULL -> clampOffsetForPanelSize(
+                x = fullPanelOffsetX,
+                y = fullPanelOffsetY,
+                panelWidth = panelMeasuredWidthPx.coerceAtLeast(1),
+                panelHeight = panelMeasuredHeightPx.coerceAtLeast(1),
+            )
+
+            PanelDisplayMode.MINI -> {
+                val ratioOffset = if (miniOffsetOverride != null) {
+                    val (miniWidth, miniHeight) = miniPanelSizePx()
+                    clampOffsetForPanelSize(
+                        x = miniOffsetOverride.first,
+                        y = miniOffsetOverride.second,
+                        panelWidth = miniWidth,
+                        panelHeight = miniHeight,
+                    )
+                } else {
+                    resolveMiniPanelOffsetFromRatio()
+                }
+                miniPanelOffsetX = ratioOffset.first
+                miniPanelOffsetY = ratioOffset.second
+                ratioOffset
+            }
+        }
+        panelOffsetX = targetX
+        panelOffsetY = targetY
+        val params = layoutParams
+        val view = overlayView
+        if (params != null && view != null) {
+            params.x = targetX
+            params.y = targetY
+            windowOps.tryUpdateViewLayout(
+                view = view,
+                params = params,
+                reason = "restore_offset_for_mode:$reason",
+            )
+        }
+    }
+
+    private fun resolveMiniPanelOffsetFromRatio(): Pair<Int, Int> {
+        val (screenWidth, screenHeight) = currentScreenSizePx()
+        val (miniWidth, miniHeight) = miniPanelSizePx()
+        val maxX = (screenWidth - miniWidth).coerceAtLeast(0)
+        val maxY = (screenHeight - miniHeight).coerceAtLeast(0)
+        val x = (miniPanelXRatio.coerceIn(0f, 1f) * maxX).roundToInt().coerceIn(0, maxX)
+        val y = (miniPanelYRatio.coerceIn(0f, 1f) * maxY).roundToInt().coerceIn(0, maxY)
+        return x to y
+    }
+
+    private fun miniPanelSizePx(): Pair<Int, Int> {
+        val miniRunning = panelMode == PanelMode.RUNNING && panelHideReasons.contains(PanelHideReason.RUNNING_TEMP)
+        return dp(
+            resolvePanelCardWidthDp(
+                panelMode = panelMode,
+                panelDisplayMode = PanelDisplayMode.MINI,
+                runningMiniActive = miniRunning,
+            ),
+        ).coerceAtLeast(1) to dp(
+            resolvePanelCardHeightDp(
+                panelMode = panelMode,
+                panelDisplayMode = PanelDisplayMode.MINI,
+                runningMiniActive = miniRunning,
+            ),
+        ).coerceAtLeast(1)
+    }
+
+    private fun clampOffsetForPanelSize(
+        x: Int,
+        y: Int,
+        panelWidth: Int,
+        panelHeight: Int,
+    ): Pair<Int, Int> {
+        val (screenWidth, screenHeight) = currentScreenSizePx()
+        val maxX = (screenWidth - panelWidth.coerceAtLeast(1)).coerceAtLeast(0)
+        val maxY = (screenHeight - panelHeight.coerceAtLeast(1)).coerceAtLeast(0)
+        return x.coerceIn(0, maxX) to y.coerceIn(0, maxY)
+    }
+
+    private fun persistMiniPanelRatio(reason: String) {
+        val (screenWidth, screenHeight) = currentScreenSizePx()
+        val (miniWidth, miniHeight) = miniPanelSizePx()
+        val maxX = (screenWidth - miniWidth).coerceAtLeast(0)
+        val maxY = (screenHeight - miniHeight).coerceAtLeast(0)
+        miniPanelXRatio = if (maxX <= 0) 0f else (miniPanelOffsetX.toFloat() / maxX.toFloat()).coerceIn(0f, 1f)
+        miniPanelYRatio = if (maxY <= 0) 0f else (miniPanelOffsetY.toFloat() / maxY.toFloat()).coerceIn(0f, 1f)
+        prefs.edit()
+            .putFloat(KEY_MINI_PANEL_X_RATIO, miniPanelXRatio)
+            .putFloat(KEY_MINI_PANEL_Y_RATIO, miniPanelYRatio)
+            .apply()
+        recordPanelVisibilityEvent(
+            event = "panel_mini_ratio.persist",
+            reason = "$reason x=$miniPanelXRatio y=$miniPanelYRatio",
         )
     }
 
@@ -771,10 +938,13 @@ class TaskControlPanelGlobalOverlay(
         if (!running || panelMode != PanelMode.RUNNING) {
             return
         }
+        val runningPanelOffset = panelOffsetX to panelOffsetY
         setPanelHideReason(PanelHideReason.RUNNING_TEMP, hidden = true)
         setPanelDisplayMode(
             mode = PanelDisplayMode.MINI,
             reason = "minimize_running_panel",
+            snapOnMiniEnter = true,
+            miniOffsetOverride = runningPanelOffset,
         )
     }
 
@@ -782,6 +952,7 @@ class TaskControlPanelGlobalOverlay(
         if (panelDisplayMode != PanelDisplayMode.MINI) {
             return
         }
+        cancelPanelSnapAnimator()
         if (panelHideReasons.contains(PanelHideReason.RUNNING_TEMP)) {
             setPanelHideReason(PanelHideReason.RUNNING_TEMP, hidden = false)
             setPanelDisplayMode(
@@ -1015,6 +1186,7 @@ class TaskControlPanelGlobalOverlay(
         effectScheduler.cancel(TaskControlPanelEffectKey.PANEL_MODE_RECORDING_RESTACK)
         effectScheduler.cancel(TaskControlPanelEffectKey.PANEL_MODE_FADE_SWITCH)
         effectScheduler.cancel(TaskControlPanelEffectKey.PANEL_MODE_LAYOUT_REFRESH)
+        cancelPanelSnapAnimator()
         resetRunningPanelState()
         resetCurrentRunSession()
         pendingSettingsModalAction = null
@@ -1156,8 +1328,28 @@ class TaskControlPanelGlobalOverlay(
         val params = layoutParams ?: return
         applyPanelWindowSizePolicy(params)
         params.gravity = Gravity.TOP or Gravity.START
-        params.x = panelOffsetX
-        params.y = panelOffsetY
+        val beforeX = panelOffsetX
+        val beforeY = panelOffsetY
+        val (nextX, nextY) = clampOffsetForPanelSize(
+            x = panelOffsetX,
+            y = panelOffsetY,
+            panelWidth = panelMeasuredWidthPx.coerceAtLeast(1),
+            panelHeight = panelMeasuredHeightPx.coerceAtLeast(1),
+        )
+        panelOffsetX = nextX
+        panelOffsetY = nextY
+        if (panelDisplayMode == PanelDisplayMode.MINI) {
+            miniPanelOffsetX = nextX
+            miniPanelOffsetY = nextY
+            if (beforeX != nextX || beforeY != nextY) {
+                persistMiniPanelRatio(reason = "update_overlay_layout_clamp")
+            }
+        } else {
+            fullPanelOffsetX = nextX
+            fullPanelOffsetY = nextY
+        }
+        params.x = nextX
+        params.y = nextY
         params.flags = panelWindowFlags()
         windowOps.tryUpdateViewLayout(
             view = view,
@@ -1339,10 +1531,28 @@ class TaskControlPanelGlobalOverlay(
         pendingRunningTraceUiFlush = false
     }
 
+    private fun isMiniDockedToRight(): Boolean {
+        if (panelDisplayMode != PanelDisplayMode.MINI) {
+            return false
+        }
+        val screenWidth = currentScreenSizePx().first
+        val panelWidth = miniPanelSizePx().first.coerceAtLeast(1)
+        val maxX = (screenWidth - panelWidth).coerceAtLeast(0)
+        if (maxX <= 0) {
+            return false
+        }
+        return panelOffsetX >= maxX / 2
+    }
+
+    private fun onPanelDragStart() {
+        panelDragging = true
+    }
+
     private fun onPanelDragged(deltaX: Float, deltaY: Float) {
         if (settingsVisible || panelDismissAnimating) {
             return
         }
+        cancelPanelSnapAnimator()
         val view = overlayView ?: return
         val params = layoutParams ?: return
         if (params.gravity != (Gravity.TOP or Gravity.START)) {
@@ -1353,15 +1563,113 @@ class TaskControlPanelGlobalOverlay(
         val panelHeight = panelMeasuredHeightPx.coerceAtLeast(1)
         val maxX = (screenWidth - panelWidth).coerceAtLeast(0)
         val maxY = (screenHeight - panelHeight).coerceAtLeast(0)
-        panelOffsetX = (panelOffsetX + deltaX.roundToInt()).coerceIn(0, maxX)
-        panelOffsetY = (panelOffsetY + deltaY.roundToInt()).coerceIn(0, maxY)
-        params.x = panelOffsetX
-        params.y = panelOffsetY
+        val nextX = (panelOffsetX + deltaX.roundToInt()).coerceIn(0, maxX)
+        val nextY = (panelOffsetY + deltaY.roundToInt()).coerceIn(0, maxY)
+        panelOffsetX = nextX
+        panelOffsetY = nextY
+        if (panelDisplayMode == PanelDisplayMode.MINI) {
+            miniPanelOffsetX = nextX
+            miniPanelOffsetY = nextY
+        } else {
+            fullPanelOffsetX = nextX
+            fullPanelOffsetY = nextY
+        }
+        params.x = nextX
+        params.y = nextY
         windowOps.tryUpdateViewLayout(
             view = view,
             params = params,
             reason = "panel_drag_update",
         )
+    }
+
+    private fun onPanelDragEnd() {
+        panelDragging = false
+        if (panelDisplayMode != PanelDisplayMode.MINI) {
+            return
+        }
+        snapPanelToHorizontalEdge(
+            animated = true,
+            reason = "drag_end_mini",
+        )
+        persistMiniPanelRatio(reason = "drag_end_mini")
+    }
+
+    private fun cancelPanelSnapAnimator() {
+        panelSnapAnimator?.cancel()
+        panelSnapAnimator = null
+    }
+
+    private fun snapPanelToHorizontalEdge(
+        animated: Boolean,
+        reason: String,
+    ) {
+        val view = overlayView ?: return
+        val params = layoutParams ?: return
+        if (params.gravity != (Gravity.TOP or Gravity.START)) {
+            return
+        }
+        val screenWidth = currentScreenSizePx().first
+        val panelWidth = if (panelDisplayMode == PanelDisplayMode.MINI) {
+            miniPanelSizePx().first.coerceAtLeast(1)
+        } else {
+            panelMeasuredWidthPx.coerceAtLeast(1)
+        }
+        val maxX = (screenWidth - panelWidth).coerceAtLeast(0)
+        if (maxX <= 0) {
+            return
+        }
+        val currentX = panelOffsetX.coerceIn(0, maxX)
+        val centerX = currentX + panelWidth / 2
+        val targetX = if (centerX < screenWidth / 2) 0 else maxX
+        if (targetX == currentX) {
+            miniPanelOffsetX = currentX
+            miniPanelOffsetY = panelOffsetY
+            persistMiniPanelRatio(reason = "snap_skip:$reason")
+            return
+        }
+        cancelPanelSnapAnimator()
+        if (!animated) {
+            panelOffsetX = targetX
+            miniPanelOffsetX = targetX
+            miniPanelOffsetY = panelOffsetY
+            params.x = targetX
+            windowOps.tryUpdateViewLayout(
+                view = view,
+                params = params,
+                reason = "panel_snap:$reason immediate",
+            )
+            persistMiniPanelRatio(reason = "snap_immediate:$reason")
+            return
+        }
+        panelSnapAnimator = ValueAnimator.ofInt(currentX, targetX).apply {
+            duration = PANEL_MINI_SNAP_ANIMATION_MS
+            interpolator = DecelerateInterpolator()
+            addUpdateListener { animator ->
+                val nextX = animator.animatedValue as Int
+                panelOffsetX = nextX
+                miniPanelOffsetX = nextX
+                miniPanelOffsetY = panelOffsetY
+                params.x = nextX
+                windowOps.tryUpdateViewLayout(
+                    view = view,
+                    params = params,
+                    reason = "panel_snap:$reason animated",
+                )
+            }
+            addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) {
+                    persistMiniPanelRatio(reason = "snap_end:$reason")
+                    panelSnapAnimator = null
+                }
+
+                override fun onAnimationCancel(animation: Animator) {
+                    persistMiniPanelRatio(reason = "snap_cancel:$reason")
+                    panelSnapAnimator = null
+                }
+            })
+            start()
+        }
     }
 
     private fun dismissPanelWithAnimation() {
@@ -1905,7 +2213,11 @@ class TaskControlPanelGlobalOverlay(
             Modifier
         } else {
             Modifier.pointerInput(animationToken) {
-                detectDragGestures { change, dragAmount ->
+                detectDragGestures(
+                    onDragStart = { onPanelDragStart() },
+                    onDragEnd = { onPanelDragEnd() },
+                    onDragCancel = { onPanelDragEnd() },
+                ) { change, dragAmount ->
                     change.consume()
                     onPanelDragged(
                         deltaX = dragAmount.x,
@@ -1924,6 +2236,30 @@ class TaskControlPanelGlobalOverlay(
             panelDisplayMode = panelDisplayMode,
             runningMiniActive = runningMiniActive,
         ).dp
+        val miniDockedRight = if (panelDisplayMode == PanelDisplayMode.MINI) {
+            isMiniDockedToRight()
+        } else {
+            false
+        }
+        val panelCardShape = if (panelDisplayMode == PanelDisplayMode.MINI && runningMiniActive && !panelDragging) {
+            if (miniDockedRight) {
+                RoundedCornerShape(
+                    topStart = 14.dp,
+                    topEnd = 0.dp,
+                    bottomStart = 14.dp,
+                    bottomEnd = 0.dp,
+                )
+            } else {
+                RoundedCornerShape(
+                    topStart = 0.dp,
+                    topEnd = 14.dp,
+                    bottomStart = 0.dp,
+                    bottomEnd = 14.dp,
+                )
+            }
+        } else {
+            RoundedCornerShape(14.dp)
+        }
         val panelAnimatedWidth by animateDpAsState(
             targetValue = panelWidth,
             animationSpec = tween(
@@ -1968,110 +2304,64 @@ class TaskControlPanelGlobalOverlay(
                         }
                     }
                     .then(panelDragModifier),
-                shape = RoundedCornerShape(14.dp),
+                shape = panelCardShape,
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.background),
                 border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
                 elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
             ) {
                 Column(
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = if (panelDisplayMode == PanelDisplayMode.MINI) {
+                        Modifier.fillMaxSize()
+                    } else {
+                        Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
+                    },
+                    verticalArrangement = if (panelDisplayMode == PanelDisplayMode.MINI) {
+                        Arrangement.Center
+                    } else {
+                        Arrangement.spacedBy(8.dp)
+                    },
                 ) {
                 if (panelDisplayMode == PanelDisplayMode.MINI) {
-                    if (runningMiniActive) {
-                        val runningMiniTransition = rememberInfiniteTransition(
-                            label = "running_mini_indicator",
-                        )
-                        val runningMiniRotation by runningMiniTransition.animateFloat(
-                            initialValue = 0f,
-                            targetValue = 360f,
-                            animationSpec = infiniteRepeatable(
-                                animation = tween(durationMillis = 1000, easing = LinearEasing),
+                    val pulseTransition = rememberInfiniteTransition(label = "mini_running_pulse")
+                    val runningPulseAlpha by pulseTransition.animateFloat(
+                        initialValue = 0.45f,
+                        targetValue = 1f,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(durationMillis = 760, easing = FastOutSlowInEasing),
+                            repeatMode = RepeatMode.Reverse,
+                        ),
+                        label = "mini_running_pulse_alpha",
+                    )
+                    val runningPulseScale by pulseTransition.animateFloat(
+                        initialValue = 0.9f,
+                        targetValue = 1.14f,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(durationMillis = 760, easing = FastOutSlowInEasing),
+                            repeatMode = RepeatMode.Reverse,
+                        ),
+                        label = "mini_running_pulse_scale",
+                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = { restorePanelFromMini() },
                             ),
-                            label = "running_mini_rotation",
-                        )
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        if (runningMiniActive) {
                             Icon(
-                                imageVector = if (runningPanelState.paused) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                                contentDescription = if (runningPanelState.paused) "已暂停" else "运行中",
-                                tint = MaterialTheme.colorScheme.primary,
+                                imageVector = Icons.Rounded.Bolt,
+                                contentDescription = "运行中",
+                                tint = androidx.compose.ui.graphics.Color(0xFFFFC107).copy(alpha = runningPulseAlpha),
                                 modifier = Modifier
-                                    .size(18.dp)
+                                    .size(20.dp)
                                     .graphicsLayer {
-                                        if (!runningPanelState.paused) {
-                                            rotationZ = runningMiniRotation
-                                        }
+                                        scaleX = runningPulseScale
+                                        scaleY = runningPulseScale
                                     },
-                            )
-                            Text(
-                                text = if (runningPanelState.paused) {
-                                    "已暂停 ${runningPanelState.stepCount} 步"
-                                } else {
-                                    "运行中 ${runningPanelState.stepCount} 步"
-                                },
-                                modifier = Modifier.weight(1f),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            OutlinedButton(
-                                modifier = Modifier.weight(1f),
-                                onClick = { toggleRunningPause() },
-                            ) {
-                                Text(if (runningPanelState.paused) "继续" else "暂停")
-                            }
-                            OutlinedButton(
-                                modifier = Modifier.weight(1f),
-                                onClick = { stopRunningTask() },
-                            ) {
-                                Text("停止")
-                            }
-                            CircleActionIconButton(
-                                enabled = running,
-                                onClick = { restorePanelFromMini() },
-                                icon = { tint ->
-                                    Icon(
-                                        imageVector = Icons.Rounded.PlayArrow,
-                                        contentDescription = "恢复运行面板",
-                                        tint = tint,
-                                        modifier = Modifier.size(16.dp),
-                                    )
-                                },
-                            )
-                        }
-                    } else {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            OutlinedButton(
-                                modifier = Modifier.weight(1f),
-                                onClick = { restorePanelFromMini() },
-                            ) {
-                                Text("恢复")
-                            }
-                            CircleActionIconButton(
-                                onClick = { dismissPanelWithAnimation() },
-                                icon = { tint ->
-                                    Icon(
-                                        imageVector = Icons.Rounded.Close,
-                                        contentDescription = "移除面板",
-                                        tint = tint,
-                                        modifier = Modifier.size(18.dp),
-                                    )
-                                },
                             )
                         }
                     }
@@ -3995,6 +4285,7 @@ class TaskControlPanelGlobalOverlay(
         effectScheduler.cancel(TaskControlPanelEffectKey.PANEL_MODE_FADE_SWITCH)
         effectScheduler.cancel(TaskControlPanelEffectKey.PANEL_MODE_LAYOUT_REFRESH)
         effectScheduler.cancel(TaskControlPanelEffectKey.PANEL_MODE_WINDOW_SIZE_UNLOCK)
+        cancelPanelSnapAnimator()
         setPanelWindowSizeTransitionLocked(
             locked = false,
             reason = "stop_capture_overlay",

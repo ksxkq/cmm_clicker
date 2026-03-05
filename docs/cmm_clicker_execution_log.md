@@ -811,6 +811,26 @@
 742. 退出 NORMAL 过渡策略收敛：`recording_stop_no_actions/recording_discard_to_normal/recording_save_to_normal/running_finished_to_normal` 改为 `useFade=false`，仅保留尺寸过渡，减少退出阶段亮度闪烁感。
 743. 保留录制进入特化：`NORMAL -> RECORDING` 仍维持“先淡出 -> restack -> 淡入”与强制 relayout，确保层级正确和首帧完整显示。
 744. 稳定性验证：以上“退出 NORMAL 去 fade”改造后再次通过 `:app:compileDebugKotlin`、`:app:testDebugUnitTest` 与 `:app:assembleDebug`。
+745. MINI 面板交互重构：运行/设置共用 MINI 形态统一为 `56x56dp` 可点击热点，移除 MINI 内部文本与按钮，仅保留“点击恢复面板”行为。
+746. MINI 吸边能力新增：进入 MINI 时自动左右贴边；MINI 拖拽结束后按离左/右最近边自动吸附，Y 轴位置保持不变，满足“只左右贴边”交互。
+747. MINI 吸边动画新增：引入 `ValueAnimator`（180ms 减速插值）驱动 `x` 位移动画，吸边不再瞬移；并在拖拽、恢复、overlay 收口时统一取消残留动画任务。
+748. 面板拖拽事件增强：`detectDragGestures` 增加 `onDragEnd/onDragCancel` 回调，MINI 模式下结束拖拽即触发吸边；非 MINI 模式维持原有自由拖拽行为。
+749. 布局单测同步：`TaskControlPanelPanelLayoutTest` 更新 MINI 尺寸断言（宽/高统一 56）并新增高度用例，保证后续调整不回退。
+750. 稳定性验证：以上“MINI 精简 + 吸边动画 + 单测更新”改造后再次通过 `:app:compileDebugKotlin`、`:app:testDebugUnitTest` 与 `:app:assembleDebug`。
+751. MINI 面板宽度按新交互改为原先一半：`resolvePanelCardWidthDp(... MINI ...)` 从 `56dp` 调整为 `28dp`，并同步更新 `TaskControlPanelPanelLayoutTest` 断言。
+752. MINI 位置状态与普通面板解耦：`TaskControlPanelGlobalOverlay` 新增 `fullPanelOffsetX/Y` 与 `miniPanelOffsetX/Y` 两套偏移状态；`setPanelDisplayMode(...)` 在 FULL/MINI 切换时分别恢复对应位置，避免互相覆盖。
+753. MINI 位置本地持久化：新增 `KEY_MINI_PANEL_X_RATIO/KEY_MINI_PANEL_Y_RATIO`，按屏幕可移动范围保存百分比；MINI 拖拽结束、吸边完成、布局边界修正后统一回写比例，重启后保持 MINI 独立位置。
+754. 运行态 MINI 贴边视觉强化：根据当前贴边方向动态切换卡片形状（贴边侧圆角为 0），并移除运行态 MINI 描边，确保左右贴边时与屏幕边缘无缝贴合。
+755. 运行态 MINI 状态指示补齐：在 MINI 内新增黄色闪电 `Bolt` 呼吸动画（alpha+scale 循环），持续表达“任务执行中”；点击 MINI 仍保持恢复运行面板。
+756. 稳定性验证：以上“MINI 半宽 + 独立百分比定位 + 运行态贴边/闪电指示”改造后通过 `:app:compileDebugKotlin`、`:app:testDebugUnitTest` 与 `:app:assembleDebug`。
+757. RUNNING MINI 圆角交互修正：新增 `panelDragging` 状态，RUNNING MINI 在拖动过程中统一使用四角圆角；仅在非拖动态按贴边方向切换“贴边侧去圆角”形态。
+758. RUNNING MINI 可见性修正：恢复 RUNNING MINI `outline` 边框（`BorderStroke(1.dp, outline)`），避免浅色背景下边界不清晰。
+759. RUNNING MINI 进入定位改为跟随 RUNNING 面板：`minimizeRunningPanel()` 进入 MINI 时传入当前 RUNNING 面板偏移作为 override，并关闭“进入即吸边”；确保最小化时 x 坐标与缩小前一致，恢复 FULL 时仍回到缩小前位置。
+760. 稳定性验证：以上“RUNNING MINI 圆角/描边/定位”改造后通过 `:app:compileDebugKotlin` 与 `:app:testDebugUnitTest`。
+761. RUNNING MINI 进入吸边策略微调：`minimizeRunningPanel()` 保留“当前位置 override”作为起点，同时恢复 `snapOnMiniEnter=true`，触发最小化后立即执行吸边动画。
+762. 稳定性验证：以上“RUNNING MINI 触发即吸边”改造后通过 `:app:compileDebugKotlin`。
+763. RUNNING MINI 二次触发吸边修复：`snapPanelToHorizontalEdge()` 与 `isMiniDockedToRight()` 在 MINI 模式下改为使用 `miniPanelSizePx().first` 参与边界/中心计算，不再依赖过渡瞬间的旧测量宽度，修复“移动 RUNNING 面板后再次缩小不吸边”问题。
+764. 稳定性验证：以上“MINI 吸边宽度基准修复”改造后通过 `:app:compileDebugKotlin`。
 
 ## 3. 正在进行
 

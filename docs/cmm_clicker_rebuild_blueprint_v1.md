@@ -435,7 +435,7 @@ interface ActionPlugin {
    - 模态关闭后仅在过渡状态 idle 时移除 overlay，确保 scrim 与卡片退出动画完整播放，减少“背景突变消失”的割裂感
    - `ModalHost` 在退出动画阶段保留最后一次 `model`，防止过渡中途因 `model` 置空而 uncompose，避免出现“看不见的遮罩层残留”
    - 所有 modal 关闭入口（按钮/遮罩/异常回收）统一传递 `removeOverlayWhenIdle`，保证无遮罩页面可及时回收 `settingsOverlayView`
-   - 对确认类动作引入短延迟（`MODAL_EXIT_DELAY_MS`）在退出动画后执行业务副作用，减少“动画被业务刷新抢断”的视觉不连续
+   - 确认类动作统一改为“动画状态驱动”执行：先关闭 modal，再在退出动画 `idle` 后触发副作用，避免固定延迟与业务刷新竞态
    - scrim 动效去重：确认类 modal 只使用 `ModalHost` 的 scrim 过渡，`SettingsOverlayContent` 的基础 scrim 不再在 modal 场景叠加，避免双曲线叠加造成的背景闪停
 33. 浮层可见性原因驱动（阶段二-交互稳定）：
    - 新增 `PanelDisplayMode`（`FULL/MINI`）与 `PanelHideReason` 集合（`SETTINGS_OPEN/RECORDING_INTERACTION/RUNNING_TEMP`），主面板可见性改为统一规则计算
@@ -456,6 +456,19 @@ interface ActionPlugin {
    - `TaskControlPanelGlobalOverlay.onSettingsModalAction` 改为统一“动作解析 + modal 关闭 + 延迟副作用调度”流程，减少重复分支并保持动效先于业务执行
    - `buildSettingsModalModel(...)` 同步下沉至 modal 模块，统一确认/反馈弹窗的 UI 模型映射逻辑
    - `ConfirmStartTask` 明确禁用背景点击关闭（`dismissOnBackdropTap=false`），开始任务确认必须通过按钮显式选择
+   - 新增 `ConfirmDeleteTask/DeleteTask`，任务删除确认复用同一 `ModalHost`（带统一 scrim + enter/exit 动画），替代原先直接删除链路
+   - 新增 `ConfirmDeleteActionNode/DeleteActionNode`，动作列表删除确认从页面内嵌 `Card` 收敛到统一 modal 管线，确保“开始任务/删除任务/删除动作/删除历史”动效与遮罩行为一致
+   - `TaskLibraryPanel` 已移除内嵌 `DeleteTaskConfirmDialog`，任务删除入口统一下沉到 overlay 的 `SettingsModal` 管线，避免多套确认 UI 并存
+   - modal 确认动作改为“动画状态驱动”：先关闭 modal，再在 `settingsModalTransitionState` 退出动画 `idle` 后执行业务副作用，替代固定时延，降低确认关闭阶段背景闪烁
+   - 增加 modal 时序诊断日志（transition/pending_action/execute_pending_action/modal_host state），用于线上复现时快速定位闪烁原因
+   - 针对“开始任务确认”临时弹窗场景新增 `keepTransientSettingsOverlayAttached`：关闭后保留 settings overlay（仅隐藏视图）而非立刻 `removeView`，降低部分 ROM（如 MIUI）窗口移除导致的背景闪帧
+   - 修正时序回归：临时 overlay 的“禁交互/隐藏”动作后移到 modal 退出 `idle` 后，避免过早将 ComposeView 置 `INVISIBLE` 导致 pending action（开始任务）延后到下次交互才触发
+   - 生命周期判定补齐：`SettingsOverlayLifecycleState` 新增 `retainTransientOverlay`，在临时保留 overlay 场景禁止过早 `shouldRender` 短路，确保“取消/确认后收口副作用（禁交互/隐藏）”必达
+   - 关闭闪烁进一步优化：临时确认弹窗收口改为“仅切 `View.VISIBLE/INVISIBLE`，不再切换 `FLAG_NOT_TOUCHABLE`”，减少部分 ROM 对窗口 flags 更新的层级重算闪帧
+   - 主面板存活期间的空闲收口策略调整：`removeSettingsOverlayIfIdle()` 优先保留 settings overlay（隐藏视图）而非 removeView，避免频繁窗口 attach/detach 引起的偶发闪烁
+   - 窗口底色防闪：overlay 与 settings overlay 的 `ComposeView` 显式使用透明背景，降低部分 ROM 在内容收口帧渲染系统默认底色引起的“闪一下”
+   - 渲染层稳定性：移除 overlay `ComposeView` 的强制硬件层设置（`setLayerType(HARDWARE)`），避免全屏浮层在可见性切换时的 layer 重建闪帧
+   - 动画尾帧稳定性：modal 退出 `idle` 后延后一帧再隐藏临时 overlay（`withFrameNanos`），规避“动画结束与 View 隐藏同帧提交”的尾帧闪烁
    - 对应单测 `TaskControlPanelSettingsModalTest` 覆盖“确认开始/确认删除/反馈弹窗默认关闭/未知动作忽略”，保障后续 modal 增量扩展
 37. 设置页数据装配下沉（阶段二-状态拆分）：
    - 新增 `TaskControlPanelReportHistoryPresentation.kt`，承载历史页作用域标签、详情当前项解析、翻页状态与相邻记录定位纯函数

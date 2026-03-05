@@ -484,6 +484,7 @@ internal fun TaskControlSettingsActionListPage(
     maxVisibleJumpLanes: Int,
     persistSettingsEditor: () -> Unit,
     mutateSettingsEditor: (String, (TaskGraphEditorStore) -> Unit) -> Unit,
+    onDeleteNodeRequest: (flowId: String, nodeId: String) -> Unit,
     openNodeEditor: (flowId: String, nodeId: String) -> Unit,
 ) {
     if (store == null || task == null) {
@@ -547,7 +548,6 @@ internal fun TaskControlSettingsActionListPage(
     val editableNodes = flow.nodes.filterNot { node ->
         node.kind == NodeKind.START || node.kind == NodeKind.END
     }
-    val pendingDeleteNode = editableNodes.firstOrNull { it.nodeId == actionListUiState.pendingDeleteNodeId }
     val rowAnchors = remember(task.taskId, state.selectedFlowId) { mutableStateMapOf<String, RowAnchor>() }
     LaunchedEffect(editableNodes.map { it.nodeId }) {
         val validIds = editableNodes.map { it.nodeId }.toSet()
@@ -713,7 +713,7 @@ internal fun TaskControlSettingsActionListPage(
                                             destructive = true,
                                             onClick = {
                                                 actionListUiState.actionMenuNodeId = null
-                                                actionListUiState.pendingDeleteNodeId = node.nodeId
+                                                onDeleteNodeRequest(state.selectedFlowId, node.nodeId)
                                             },
                                         )
                                     }
@@ -734,53 +734,5 @@ internal fun TaskControlSettingsActionListPage(
             }
         }
         Spacer(modifier = Modifier.height(8.dp))
-    }
-    if (pendingDeleteNode != null) {
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(10.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Text(
-                    text = "删除动作",
-                    style = MaterialTheme.typography.titleSmall,
-                )
-                Text(
-                    text = "确认删除动作 ${pendingDeleteNode.nodeId} 吗？",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    OutlinedButton(
-                        modifier = Modifier.weight(1f),
-                        onClick = { actionListUiState.pendingDeleteNodeId = null },
-                    ) {
-                        Text("取消")
-                    }
-                    OutlinedButton(
-                        modifier = Modifier.weight(1f),
-                        onClick = {
-                            val nodeId = pendingDeleteNode.nodeId
-                            actionListUiState.pendingDeleteNodeId = null
-                            mutateSettingsEditor("已删除动作") {
-                                it.removeNode(nodeId)
-                            }
-                        },
-                    ) {
-                        Text("确认删除")
-                    }
-                }
-            }
-        }
     }
 }

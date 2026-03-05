@@ -43,6 +43,42 @@ class TaskControlPanelSettingsModalTest {
     }
 
     @Test
+    fun `resolveSettingsModalAction maps confirm delete task actions`() {
+        val modal = SettingsModal.ConfirmDeleteTask(
+            taskId = "task-1",
+            taskName = "Task A",
+        )
+
+        assertEquals(
+            SettingsModalAction.Dismiss,
+            resolveSettingsModalAction(modal, MODAL_ACTION_CANCEL),
+        )
+        assertEquals(
+            SettingsModalAction.DeleteTask("task-1"),
+            resolveSettingsModalAction(modal, MODAL_ACTION_CONFIRM),
+        )
+        assertNull(resolveSettingsModalAction(modal, "unknown"))
+    }
+
+    @Test
+    fun `resolveSettingsModalAction maps confirm delete action node actions`() {
+        val modal = SettingsModal.ConfirmDeleteActionNode(
+            flowId = "flow-1",
+            nodeId = "node-1",
+        )
+
+        assertEquals(
+            SettingsModalAction.Dismiss,
+            resolveSettingsModalAction(modal, MODAL_ACTION_CANCEL),
+        )
+        assertEquals(
+            SettingsModalAction.DeleteActionNode(flowId = "flow-1", nodeId = "node-1"),
+            resolveSettingsModalAction(modal, MODAL_ACTION_CONFIRM),
+        )
+        assertNull(resolveSettingsModalAction(modal, "unknown"))
+    }
+
+    @Test
     fun `resolveSettingsModalAction closes feedback modals on any action`() {
         assertEquals(
             SettingsModalAction.Dismiss,
@@ -106,6 +142,40 @@ class TaskControlPanelSettingsModalTest {
         assertTrue(model?.message?.contains("未命名任务") == true)
         assertEquals(TaskControlModalTone.DEFAULT, model?.tone)
         assertFalse(model?.dismissOnBackdropTap ?: true)
+        assertEquals(2, model?.actions?.size)
+    }
+
+    @Test
+    fun `buildSettingsModalModel maps confirm delete task to warning modal`() {
+        val model = buildSettingsModalModel(
+            modal = SettingsModal.ConfirmDeleteTask(
+                taskId = "task-1",
+                taskName = "",
+            ),
+            runtimeReportHistory = emptyList(),
+        )
+
+        assertEquals("删除任务", model?.title)
+        assertTrue(model?.message?.contains("未命名任务") == true)
+        assertEquals(TaskControlModalTone.WARNING, model?.tone)
+        assertTrue(model?.dismissOnBackdropTap == true)
+        assertEquals(2, model?.actions?.size)
+    }
+
+    @Test
+    fun `buildSettingsModalModel maps confirm delete action node to warning modal`() {
+        val model = buildSettingsModalModel(
+            modal = SettingsModal.ConfirmDeleteActionNode(
+                flowId = "flow-1",
+                nodeId = "node-1",
+            ),
+            runtimeReportHistory = emptyList(),
+        )
+
+        assertEquals("删除动作", model?.title)
+        assertTrue(model?.message?.contains("node-1") == true)
+        assertEquals(TaskControlModalTone.WARNING, model?.tone)
+        assertTrue(model?.dismissOnBackdropTap == true)
         assertEquals(2, model?.actions?.size)
     }
 }

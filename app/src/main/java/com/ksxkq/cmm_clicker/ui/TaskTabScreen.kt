@@ -86,7 +86,6 @@ fun TaskLibraryPanel(
     var segment by remember { mutableStateOf(TaskLibrarySegment.ALL) }
     var renameTaskId by remember { mutableStateOf<String?>(null) }
     var renameTaskName by remember { mutableStateOf("") }
-    var pendingDeleteTaskId by remember { mutableStateOf<String?>(null) }
     var menuTaskId by remember { mutableStateOf<String?>(null) }
     val trimmedKeyword = searchKeyword.trim()
     val filteredTasks = remember(tasks, trimmedKeyword, segment) {
@@ -104,7 +103,6 @@ fun TaskLibraryPanel(
         }
     }
     val renameCandidate = tasks.firstOrNull { it.taskId == renameTaskId }
-    val deleteCandidate = tasks.firstOrNull { it.taskId == pendingDeleteTaskId }
     LaunchedEffect(renameCandidate?.taskId, renameCandidate?.name) {
         renameTaskName = renameCandidate?.name.orEmpty()
     }
@@ -263,7 +261,7 @@ fun TaskLibraryPanel(
                                         destructive = true,
                                         onClick = {
                                             menuTaskId = null
-                                            pendingDeleteTaskId = task.taskId
+                                            onDeleteTask(task.taskId)
                                         },
                                     )
                                 }
@@ -311,63 +309,6 @@ fun TaskLibraryPanel(
                 renameTaskId = null
             },
         )
-    }
-    if (deleteCandidate != null) {
-        DeleteTaskConfirmDialog(
-            taskName = deleteCandidate.name,
-            onCancel = { pendingDeleteTaskId = null },
-            onConfirm = {
-                onDeleteTask(deleteCandidate.taskId)
-                pendingDeleteTaskId = null
-            },
-        )
-    }
-}
-
-@Composable
-private fun DeleteTaskConfirmDialog(
-    taskName: String,
-    onCancel: () -> Unit,
-    onConfirm: () -> Unit,
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Text(
-                text = "确认删除任务",
-                style = MaterialTheme.typography.titleMedium,
-            )
-            Text(
-                text = "将删除任务：$taskName",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                ActionButton(
-                    text = "取消",
-                    modifier = Modifier.weight(1f),
-                    onClick = onCancel,
-                )
-                Button(
-                    modifier = Modifier.weight(1f),
-                    onClick = onConfirm,
-                ) {
-                    Text("确认删除")
-                }
-            }
-        }
     }
 }
 

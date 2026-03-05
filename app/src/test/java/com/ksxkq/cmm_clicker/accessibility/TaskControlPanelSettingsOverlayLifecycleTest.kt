@@ -16,11 +16,14 @@ class TaskControlPanelSettingsOverlayLifecycleTest {
             hasModal = false,
             clickPickerVisible = false,
             pendingRemoval = false,
+            retainTransientOverlay = false,
         )
         val withModal = hidden.copy(hasModal = true)
+        val withTransient = hidden.copy(retainTransientOverlay = true)
 
         assertFalse(shouldRenderSettingsOverlay(hidden))
         assertTrue(shouldRenderSettingsOverlay(withModal))
+        assertTrue(shouldRenderSettingsOverlay(withTransient))
     }
 
     @Test
@@ -32,13 +35,16 @@ class TaskControlPanelSettingsOverlayLifecycleTest {
             hasModal = false,
             clickPickerVisible = true,
             pendingRemoval = true,
+            retainTransientOverlay = false,
         )
         val blockedByDialog = idle.copy(recordingDialogVisible = true)
         val blockedByModal = idle.copy(hasModal = true)
+        val blockedByTransient = idle.copy(retainTransientOverlay = true)
 
         assertTrue(canRemoveSettingsOverlayWhenIdle(idle))
         assertFalse(canRemoveSettingsOverlayWhenIdle(blockedByDialog))
         assertFalse(canRemoveSettingsOverlayWhenIdle(blockedByModal))
+        assertFalse(canRemoveSettingsOverlayWhenIdle(blockedByTransient))
     }
 
     @Test
@@ -50,15 +56,17 @@ class TaskControlPanelSettingsOverlayLifecycleTest {
             hasModal = false,
             clickPickerVisible = false,
             pendingRemoval = true,
+            retainTransientOverlay = false,
         )
         val idle = blocked.copy(
             settingsVisible = false,
             recordingDialogAnimatingOut = false,
             pendingRemoval = false,
+            retainTransientOverlay = false,
         )
 
         assertEquals(
-            "settings=true,dialog=false,anim=true,modal=false",
+            "settings=true,dialog=false,anim=true,modal=false,retain=false",
             settingsOverlayRemovalBlockSignature(blocked),
         )
         assertEquals(null, settingsOverlayRemovalBlockSignature(idle))

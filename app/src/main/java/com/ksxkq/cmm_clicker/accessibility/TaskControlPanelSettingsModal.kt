@@ -11,6 +11,16 @@ internal sealed interface SettingsModal {
         val taskName: String,
     ) : SettingsModal
 
+    data class ConfirmDeleteTask(
+        val taskId: String,
+        val taskName: String,
+    ) : SettingsModal
+
+    data class ConfirmDeleteActionNode(
+        val flowId: String,
+        val nodeId: String,
+    ) : SettingsModal
+
     data class ConfirmDeleteRuntimeReport(
         val reportId: String,
     ) : SettingsModal
@@ -33,6 +43,15 @@ internal sealed interface SettingsModalAction {
         val taskId: String,
     ) : SettingsModalAction
 
+    data class DeleteTask(
+        val taskId: String,
+    ) : SettingsModalAction
+
+    data class DeleteActionNode(
+        val flowId: String,
+        val nodeId: String,
+    ) : SettingsModalAction
+
     data class DeleteRuntimeReport(
         val reportId: String,
     ) : SettingsModalAction
@@ -46,6 +65,21 @@ internal fun resolveSettingsModalAction(
         is SettingsModal.ConfirmStartTask -> when (actionKey) {
             MODAL_ACTION_CANCEL -> SettingsModalAction.Dismiss
             MODAL_ACTION_CONFIRM -> SettingsModalAction.StartTask(taskId = modal.taskId)
+            else -> null
+        }
+
+        is SettingsModal.ConfirmDeleteTask -> when (actionKey) {
+            MODAL_ACTION_CANCEL -> SettingsModalAction.Dismiss
+            MODAL_ACTION_CONFIRM -> SettingsModalAction.DeleteTask(taskId = modal.taskId)
+            else -> null
+        }
+
+        is SettingsModal.ConfirmDeleteActionNode -> when (actionKey) {
+            MODAL_ACTION_CANCEL -> SettingsModalAction.Dismiss
+            MODAL_ACTION_CONFIRM -> SettingsModalAction.DeleteActionNode(
+                flowId = modal.flowId,
+                nodeId = modal.nodeId,
+            )
             else -> null
         }
 
@@ -92,6 +126,44 @@ internal fun buildSettingsModalModel(
             TaskControlModalModel(
                 title = "删除历史记录",
                 message = "确认删除这条历史记录吗？\n${pendingItem.reportId}",
+                tone = TaskControlModalTone.WARNING,
+                dismissOnBackdropTap = true,
+                actions = listOf(
+                    TaskControlModalAction(
+                        key = MODAL_ACTION_CANCEL,
+                        text = "取消",
+                    ),
+                    TaskControlModalAction(
+                        key = MODAL_ACTION_CONFIRM,
+                        text = "确认删除",
+                    ),
+                ),
+            )
+        }
+
+        is SettingsModal.ConfirmDeleteTask -> {
+            TaskControlModalModel(
+                title = "删除任务",
+                message = "确认删除任务：${modal.taskName.ifBlank { "未命名任务" }}",
+                tone = TaskControlModalTone.WARNING,
+                dismissOnBackdropTap = true,
+                actions = listOf(
+                    TaskControlModalAction(
+                        key = MODAL_ACTION_CANCEL,
+                        text = "取消",
+                    ),
+                    TaskControlModalAction(
+                        key = MODAL_ACTION_CONFIRM,
+                        text = "确认删除",
+                    ),
+                ),
+            )
+        }
+
+        is SettingsModal.ConfirmDeleteActionNode -> {
+            TaskControlModalModel(
+                title = "删除动作",
+                message = "确认删除动作 ${modal.nodeId} 吗？",
                 tone = TaskControlModalTone.WARNING,
                 dismissOnBackdropTap = true,
                 actions = listOf(

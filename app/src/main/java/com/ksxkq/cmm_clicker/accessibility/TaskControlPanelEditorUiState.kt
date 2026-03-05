@@ -10,7 +10,6 @@ import androidx.compose.runtime.setValue
 internal class ActionListUiState {
     var addActionMenuExpanded by mutableStateOf(false)
     var actionMenuNodeId by mutableStateOf<String?>(null)
-    var pendingDeleteNodeId by mutableStateOf<String?>(null)
 }
 
 @Stable

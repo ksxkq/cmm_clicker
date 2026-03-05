@@ -34,6 +34,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import android.util.Log
 import kotlin.math.roundToInt
 
 internal enum class TaskControlModalTone {
@@ -63,6 +64,7 @@ internal fun TaskControlModalHost(
     onDismissRequest: () -> Unit,
     onAction: (String) -> Unit,
 ) {
+    val logTag = "TaskControlModalHost"
     var retainedModel by remember { mutableStateOf<TaskControlModalModel?>(null) }
     if (model != null) {
         retainedModel = model
@@ -79,11 +81,31 @@ internal fun TaskControlModalHost(
     if (resolvedModel == null) {
         return
     }
+    LaunchedEffect(
+        resolvedModel.title,
+        visibleState.currentState,
+        visibleState.targetState,
+        visibleState.isIdle,
+    ) {
+        Log.d(
+            logTag,
+            "modal_host title=${resolvedModel.title} current=${visibleState.currentState} " +
+                "target=${visibleState.targetState} idle=${visibleState.isIdle}",
+        )
+    }
+    val scrimFadeSpec = tween<Float>(
+        durationMillis = 180,
+        easing = FastOutSlowInEasing,
+    )
+    val cardFadeSpec = tween<Float>(
+        durationMillis = 180,
+        easing = FastOutSlowInEasing,
+    )
     Box(modifier = Modifier.fillMaxSize()) {
         AnimatedVisibility(
             visibleState = visibleState,
-            enter = fadeIn(animationSpec = tween(durationMillis = 160)),
-            exit = fadeOut(animationSpec = tween(durationMillis = 120)),
+            enter = fadeIn(animationSpec = scrimFadeSpec),
+            exit = fadeOut(animationSpec = scrimFadeSpec),
             modifier = Modifier.fillMaxSize(),
         ) {
             Box(
@@ -104,12 +126,12 @@ internal fun TaskControlModalHost(
 
         AnimatedVisibility(
             visibleState = visibleState,
-            enter = fadeIn(animationSpec = tween(durationMillis = 160)) + slideInVertically(
-                animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
+            enter = fadeIn(animationSpec = cardFadeSpec) + slideInVertically(
+                animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
                 initialOffsetY = { fullHeight -> (fullHeight * 0.08f).roundToInt() },
             ),
-            exit = fadeOut(animationSpec = tween(durationMillis = 120)) + slideOutVertically(
-                animationSpec = tween(durationMillis = 120, easing = FastOutSlowInEasing),
+            exit = fadeOut(animationSpec = cardFadeSpec) + slideOutVertically(
+                animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing),
                 targetOffsetY = { fullHeight -> (fullHeight * 0.05f).roundToInt() },
             ),
             modifier = Modifier

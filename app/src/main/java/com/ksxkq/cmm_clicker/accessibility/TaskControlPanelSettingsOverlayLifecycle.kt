@@ -7,6 +7,7 @@ internal data class SettingsOverlayLifecycleState(
     val hasModal: Boolean,
     val clickPickerVisible: Boolean,
     val pendingRemoval: Boolean,
+    val retainTransientOverlay: Boolean,
 )
 
 internal fun shouldRenderSettingsOverlay(
@@ -17,7 +18,8 @@ internal fun shouldRenderSettingsOverlay(
         state.recordingDialogAnimatingOut ||
         state.hasModal ||
         state.clickPickerVisible ||
-        state.pendingRemoval
+        state.pendingRemoval ||
+        state.retainTransientOverlay
 }
 
 internal fun canRemoveSettingsOverlayWhenIdle(
@@ -26,7 +28,8 @@ internal fun canRemoveSettingsOverlayWhenIdle(
     return !state.settingsVisible &&
         !state.recordingDialogVisible &&
         !state.recordingDialogAnimatingOut &&
-        !state.hasModal
+        !state.hasModal &&
+        !state.retainTransientOverlay
 }
 
 internal fun settingsOverlayRemovalBlockSignature(
@@ -38,5 +41,6 @@ internal fun settingsOverlayRemovalBlockSignature(
     return "settings=${state.settingsVisible}," +
         "dialog=${state.recordingDialogVisible}," +
         "anim=${state.recordingDialogAnimatingOut}," +
-        "modal=${state.hasModal}"
+        "modal=${state.hasModal}," +
+        "retain=${state.retainTransientOverlay}"
 }

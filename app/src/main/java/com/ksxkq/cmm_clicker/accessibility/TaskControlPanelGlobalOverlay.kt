@@ -81,6 +81,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
@@ -184,7 +185,6 @@ class TaskControlPanelGlobalOverlay(
         private const val CLICK_PICKER_SCRIM_ALPHA = 0.08f
         private const val ACTION_LIST_MAX_VISIBLE_JUMP_LANES = 3
         private const val RUNTIME_REPORT_HISTORY_LIMIT = 80
-        private const val MODAL_EXIT_DELAY_MS = 130L
         private const val PANEL_VISIBILITY_TRACE_LIMIT = 180
     }
 
@@ -292,6 +292,7 @@ class TaskControlPanelGlobalOverlay(
     private var runtimeReportHistoryTaskId by mutableStateOf<String?>(null)
     private var runtimeReportHistoryTaskName by mutableStateOf("")
     private var settingsModal by mutableStateOf<SettingsModal?>(null)
+    private var pendingSettingsModalAction by mutableStateOf<SettingsModalAction?>(null)
     private var runtimeReportDetail by mutableStateOf<RuntimeRunReportDetail?>(null)
     private var runtimeReportDetailMessage by mutableStateOf("")
     private var uiRevision by mutableIntStateOf(0)
@@ -302,6 +303,7 @@ class TaskControlPanelGlobalOverlay(
     private var recordingSaveDialogAnimatingOut by mutableStateOf(false)
     private var removeSettingsOverlayAfterRecordingDialogExit = false
     private var pendingSettingsOverlayRemoval = false
+    private var keepTransientSettingsOverlayAttached = false
     private var settingsOverlayIdleBlockSignature by mutableStateOf("")
     private var settingsOverlayInteractionEnabled = true
     private var panelVisibilityTrace by mutableStateOf<List<PanelVisibilityTraceEntry>>(emptyList())
@@ -382,6 +384,8 @@ class TaskControlPanelGlobalOverlay(
         runtimeReportHistoryTaskId = null
         runtimeReportHistoryTaskName = ""
         settingsModal = null
+        pendingSettingsModalAction = null
+        keepTransientSettingsOverlayAttached = false
         runtimeReportDetail = null
         runtimeReportDetailMessage = ""
         runtimeReportHistory = loadRuntimeReportHistory()
@@ -535,29 +539,86 @@ class TaskControlPanelGlobalOverlay(
     }
 
     private fun setSettingsOverlayInteractionEnabled(enabled: Boolean) {
+        setSettingsOverlayInteractionEnabled(
+            enabled = enabled,
+            updateVisibility = true,
+        )
+    }
+
+    private fun setSettingsOverlayInteractionEnabled(
+        enabled: Boolean,
+        updateVisibility: Boolean,
+    ) {
+        val view = settingsOverlayView ?: return
         if (settingsOverlayInteractionEnabled == enabled) {
+            if (updateVisibility) {
+                view.visibility = if (enabled) View.VISIBLE else View.INVISIBLE
+            }
             return
         }
         settingsOverlayInteractionEnabled = enabled
-        val view = settingsOverlayView ?: return
-        val params = settingsLayoutParams ?: return
-        val nextFlags = if (enabled) {
-            params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
-        } else {
-            params.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        val params = settingsLayoutParams
+        if (params != null) {
+            val nextFlags = if (enabled) {
+                params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+            } else {
+                params.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+            }
+            if (params.flags != nextFlags) {
+                params.flags = nextFlags
+                windowOps.tryUpdateViewLayout(
+                    view = view,
+                    params = params,
+                    reason = "settings_overlay_interaction enabled=$enabled",
+                )
+            }
         }
-        if (params.flags != nextFlags) {
-            params.flags = nextFlags
-            windowOps.tryUpdateViewLayout(
-                view = view,
-                params = params,
-                reason = "settings_overlay_interaction enabled=$enabled",
-            )
+        if (updateVisibility) {
+            view.visibility = if (enabled) View.VISIBLE else View.INVISIBLE
         }
-        view.visibility = if (enabled) View.VISIBLE else View.INVISIBLE
         recordPanelVisibilityEvent(
             event = "settings_overlay_interaction",
-            reason = "enabled=$enabled",
+            reason = "enabled=$enabled updateVisibility=$updateVisibility",
+        )
+    }
+
+    private fun setSettingsOverlayViewVisible(
+        visible: Boolean,
+        reason: String,
+    ) {
+        val view = settingsOverlayView ?: return
+        val targetVisibility = if (visible) View.VISIBLE else View.INVISIBLE
+        if (view.visibility == targetVisibility) {
+            return
+        }
+        view.visibility = targetVisibility
+        recordPanelVisibilityEvent(
+            event = "settings_overlay_visibility",
+            reason = "$reason visible=$visible",
+        )
+    }
+
+    private fun applySettingsOverlayFocusabilityForCurrentContext(reason: String) {
+        val params = settingsLayoutParams ?: return
+        val view = settingsOverlayView ?: return
+        val shouldBeFocusable = settingsVisible
+        val nextFlags = if (shouldBeFocusable) {
+            params.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
+        } else {
+            params.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+        }
+        if (params.flags == nextFlags) {
+            return
+        }
+        params.flags = nextFlags
+        windowOps.tryUpdateViewLayout(
+            view = view,
+            params = params,
+            reason = "settings_overlay_focusability:$reason focusable=$shouldBeFocusable",
+        )
+        recordPanelVisibilityEvent(
+            event = "settings_overlay_focusability",
+            reason = "$reason focusable=$shouldBeFocusable",
         )
     }
 
@@ -641,11 +702,13 @@ class TaskControlPanelGlobalOverlay(
             reason = "restore_settings_overlay",
         )
         if (settingsVisible) {
+            applySettingsOverlayFocusabilityForCurrentContext(reason = "restore_settings_overlay_visible")
             setSettingsOverlayInteractionEnabled(enabled = true)
             touchUi()
             return
         }
         ensureSettingsOverlayView()
+        applySettingsOverlayFocusabilityForCurrentContext(reason = "restore_settings_overlay_prepare")
         setSettingsOverlayInteractionEnabled(enabled = true)
         setPendingSettingsOverlayRemoval(
             pending = false,
@@ -702,7 +765,7 @@ class TaskControlPanelGlobalOverlay(
             setViewTreeLifecycleOwner(owner)
             setViewTreeViewModelStoreOwner(owner)
             setViewTreeSavedStateRegistryOwner(owner)
-            setLayerType(View.LAYER_TYPE_HARDWARE, null)
+            setBackgroundColor(android.graphics.Color.TRANSPARENT)
             ViewCompat.setAccessibilityPaneTitle(this, "TaskControlOverlay")
         }
         val params = WindowManager.LayoutParams(
@@ -770,7 +833,7 @@ class TaskControlPanelGlobalOverlay(
             setViewTreeLifecycleOwner(owner)
             setViewTreeViewModelStoreOwner(owner)
             setViewTreeSavedStateRegistryOwner(owner)
-            setLayerType(View.LAYER_TYPE_HARDWARE, null)
+            setBackgroundColor(android.graphics.Color.TRANSPARENT)
             ViewCompat.setAccessibilityPaneTitle(this, "TaskControlSettingsOverlay")
         }
         val params = WindowManager.LayoutParams(
@@ -853,6 +916,8 @@ class TaskControlPanelGlobalOverlay(
         settingsRoute = SettingsRoute.TaskList
         settingsTask = null
         settingsEditorStore = null
+        pendingSettingsModalAction = null
+        keepTransientSettingsOverlayAttached = false
         resetRecordingSaveDialogState()
         setPendingSettingsOverlayRemoval(
             pending = false,
@@ -897,6 +962,8 @@ class TaskControlPanelGlobalOverlay(
         panelMode = PanelMode.NORMAL
         resetRunningPanelState()
         resetCurrentRunSession()
+        pendingSettingsModalAction = null
+        keepTransientSettingsOverlayAttached = false
         resetRecordingSaveDialogState()
         setPendingSettingsOverlayRemoval(
             pending = false,
@@ -937,6 +1004,7 @@ class TaskControlPanelGlobalOverlay(
             hasModal = settingsModal != null,
             clickPickerVisible = clickPickerVisible,
             pendingRemoval = pendingSettingsOverlayRemoval,
+            retainTransientOverlay = keepTransientSettingsOverlayAttached,
         )
         val blockSignature = settingsOverlayRemovalBlockSignature(lifecycleState)
         if (blockSignature != null) {
@@ -949,6 +1017,23 @@ class TaskControlPanelGlobalOverlay(
             }
             return
         }
+        if (shouldKeepSettingsOverlayAttached()) {
+            settingsOverlayIdleBlockSignature = ""
+            setPendingSettingsOverlayRemoval(
+                pending = false,
+                reason = "remove_if_idle_keep_attached",
+            )
+            setSettingsOverlayViewVisible(
+                visible = false,
+                reason = "remove_if_idle_keep_attached",
+            )
+            recordPanelVisibilityEvent(
+                event = "settings_overlay.keep_attached",
+                reason = "remove_if_idle_keep_attached",
+            )
+            touchUi()
+            return
+        }
         settingsOverlayIdleBlockSignature = ""
         setPendingSettingsOverlayRemoval(
             pending = false,
@@ -956,6 +1041,10 @@ class TaskControlPanelGlobalOverlay(
         )
         removeSettingsOverlay(reason = "remove_if_idle_ready")
         touchUi()
+    }
+
+    private fun shouldKeepSettingsOverlayAttached(): Boolean {
+        return overlayVisible && settingsOverlayView != null
     }
 
     private fun dismissRecordingSaveDialogWithAnimation(
@@ -1148,11 +1237,13 @@ class TaskControlPanelGlobalOverlay(
         settingsRoute = route
         settingsTask = null
         settingsEditorStore = null
+        keepTransientSettingsOverlayAttached = false
         setPendingSettingsOverlayRemoval(
             pending = false,
             reason = reason,
         )
         ensureSettingsOverlayView()
+        applySettingsOverlayFocusabilityForCurrentContext(reason = "show_settings_overlay_route")
         touchUi()
         startSettingsSheetEnterAnimation()
     }
@@ -1321,6 +1412,8 @@ class TaskControlPanelGlobalOverlay(
     }
 
     private fun requestRuntimeReportDelete(reportId: String) {
+        pendingSettingsModalAction = null
+        keepTransientSettingsOverlayAttached = false
         settingsModal = SettingsModal.ConfirmDeleteRuntimeReport(reportId = reportId)
         recordPanelVisibilityEvent(
             event = "settings_modal.show",
@@ -1335,11 +1428,18 @@ class TaskControlPanelGlobalOverlay(
     ) {
         if (settingsModal == null) {
             if (removeOverlayWhenIdle && !settingsVisible) {
-                setPendingSettingsOverlayRemoval(
-                    pending = true,
-                    reason = "dismiss_settings_modal_without_visible:$reason",
-                )
-                removeSettingsOverlayIfIdle()
+                if (keepTransientSettingsOverlayAttached) {
+                    setPendingSettingsOverlayRemoval(
+                        pending = false,
+                        reason = "dismiss_settings_modal_keep_attached_without_visible:$reason",
+                    )
+                } else {
+                    setPendingSettingsOverlayRemoval(
+                        pending = true,
+                        reason = "dismiss_settings_modal_without_visible:$reason",
+                    )
+                    removeSettingsOverlayIfIdle()
+                }
             }
             return
         }
@@ -1350,10 +1450,17 @@ class TaskControlPanelGlobalOverlay(
             reason = "$reason:$dismissedType",
         )
         if (removeOverlayWhenIdle && !settingsVisible) {
-            setPendingSettingsOverlayRemoval(
-                pending = true,
-                reason = "dismiss_settings_modal:$reason",
-            )
+            if (keepTransientSettingsOverlayAttached) {
+                setPendingSettingsOverlayRemoval(
+                    pending = false,
+                    reason = "dismiss_settings_modal_keep_attached:$reason",
+                )
+            } else {
+                setPendingSettingsOverlayRemoval(
+                    pending = true,
+                    reason = "dismiss_settings_modal:$reason",
+                )
+            }
         }
         touchUi()
     }
@@ -1368,28 +1475,31 @@ class TaskControlPanelGlobalOverlay(
             modal = modal,
             actionKey = actionKey,
         ) ?: return
+        if (resolvedAction == SettingsModalAction.Dismiss) {
+            pendingSettingsModalAction = null
+        } else {
+            pendingSettingsModalAction = resolvedAction
+            Log.d(
+                TAG,
+                "settings_modal pending_action=${resolvedAction::class.simpleName ?: "Unknown"}",
+            )
+        }
         dismissSettingsModal(removeOverlayWhenIdle = !settingsVisible)
-        when (resolvedAction) {
-            SettingsModalAction.Dismiss -> return
-            is SettingsModalAction.StartTask -> {
-                effectScheduler.schedule(
-                    key = TaskControlPanelEffectKey.SETTINGS_MODAL_ACTION,
-                    delayMs = MODAL_EXIT_DELAY_MS,
-                ) {
-                    startLastTask(preferredTaskId = resolvedAction.taskId)
-                }
-                return
+    }
+
+    private fun performPendingSettingsModalAction(action: SettingsModalAction) {
+        when (action) {
+            SettingsModalAction.Dismiss -> Unit
+            is SettingsModalAction.StartTask -> startLastTask(preferredTaskId = action.taskId)
+            is SettingsModalAction.DeleteTask -> performDeleteTaskFromSettings(action.taskId)
+            is SettingsModalAction.DeleteActionNode -> {
+                performDeleteActionNodeFromSettings(
+                    flowId = action.flowId,
+                    nodeId = action.nodeId,
+                )
             }
 
-            is SettingsModalAction.DeleteRuntimeReport -> {
-                effectScheduler.schedule(
-                    key = TaskControlPanelEffectKey.SETTINGS_MODAL_ACTION,
-                    delayMs = MODAL_EXIT_DELAY_MS,
-                ) {
-                    deleteRuntimeReport(resolvedAction.reportId)
-                }
-                return
-            }
+            is SettingsModalAction.DeleteRuntimeReport -> deleteRuntimeReport(action.reportId)
         }
     }
 
@@ -1458,6 +1568,7 @@ class TaskControlPanelGlobalOverlay(
             settingsRoute = SettingsRoute.TaskList
             settingsTask = null
             settingsEditorStore = null
+            applySettingsOverlayFocusabilityForCurrentContext(reason = "close_settings_panel")
             setPendingSettingsOverlayRemoval(
                 pending = true,
                 reason = "close_settings_panel_animation_done",
@@ -2000,6 +2111,7 @@ class TaskControlPanelGlobalOverlay(
             hasModal = settingsModalVisible,
             clickPickerVisible = clickPickerVisible,
             pendingRemoval = pendingSettingsOverlayRemoval,
+            retainTransientOverlay = keepTransientSettingsOverlayAttached,
         )
         if (!shouldRenderSettingsOverlay(lifecycleState)) {
             return
@@ -2040,6 +2152,60 @@ class TaskControlPanelGlobalOverlay(
         val anyAuxContentVisible = effectiveSheetVisible ||
             dialogVisible ||
             clickPickerVisible
+        val modalTransitionSettled = settingsModalTransitionState.isIdle &&
+            !settingsModalTransitionState.currentState &&
+            !settingsModalTransitionState.targetState
+        LaunchedEffect(
+            activeSettingsModal,
+            settingsModalTransitionState.currentState,
+            settingsModalTransitionState.targetState,
+            settingsModalTransitionState.isIdle,
+            pendingSettingsOverlayRemoval,
+        ) {
+            val modalType = activeSettingsModal?.let { it::class.simpleName } ?: "-"
+            Log.d(
+                TAG,
+                "settings_modal transition modal=$modalType current=${settingsModalTransitionState.currentState} " +
+                    "target=${settingsModalTransitionState.targetState} " +
+                    "idle=${settingsModalTransitionState.isIdle} pendingRemove=$pendingSettingsOverlayRemoval",
+            )
+        }
+        val pendingModalAction = pendingSettingsModalAction
+        if (pendingModalAction != null && modalTransitionSettled) {
+            LaunchedEffect(pendingModalAction) {
+                if (!settingsVisible && keepTransientSettingsOverlayAttached) {
+                    withFrameNanos { }
+                    setSettingsOverlayViewVisible(
+                        visible = false,
+                        reason = "transient_modal_settled_pending_action",
+                    )
+                    keepTransientSettingsOverlayAttached = false
+                    touchUi()
+                    Log.d(TAG, "settings_modal transient_overlay_hidden_after_settled")
+                }
+                if (!settingsVisible && !keepTransientSettingsOverlayAttached) {
+                    removeSettingsOverlayIfIdle()
+                }
+                pendingSettingsModalAction = null
+                Log.d(
+                    TAG,
+                    "settings_modal execute_pending_action=${pendingModalAction::class.simpleName ?: "Unknown"}",
+                )
+                performPendingSettingsModalAction(pendingModalAction)
+            }
+        }
+        if (pendingModalAction == null && modalTransitionSettled && !settingsVisible && keepTransientSettingsOverlayAttached) {
+            LaunchedEffect(modalTransitionSettled, keepTransientSettingsOverlayAttached, settingsVisible) {
+                withFrameNanos { }
+                setSettingsOverlayViewVisible(
+                    visible = false,
+                    reason = "transient_modal_settled_dismiss",
+                )
+                keepTransientSettingsOverlayAttached = false
+                touchUi()
+                Log.d(TAG, "settings_modal transient_overlay_hidden_on_dismiss")
+            }
+        }
         val route = settingsRoute
         // ModalHost has its own full-screen scrim. Keep base scrim for sheet/recording dialog only.
         val scrimTargetAlpha = when {
@@ -2612,6 +2778,21 @@ class TaskControlPanelGlobalOverlay(
     }
 
     private fun deleteTaskFromSettings(taskId: String) {
+        val pendingTaskName = tasks.firstOrNull { it.taskId == taskId }?.name ?: "未命名任务"
+        pendingSettingsModalAction = null
+        keepTransientSettingsOverlayAttached = false
+        settingsModal = SettingsModal.ConfirmDeleteTask(
+            taskId = taskId,
+            taskName = pendingTaskName,
+        )
+        recordPanelVisibilityEvent(
+            event = "settings_modal.show",
+            reason = "confirm_delete_task:$taskId",
+        )
+        touchUi()
+    }
+
+    private fun performDeleteTaskFromSettings(taskId: String) {
         scope.launch {
             withContext(Dispatchers.IO) {
                 taskRepository.deleteTask(taskId)
@@ -2626,6 +2807,28 @@ class TaskControlPanelGlobalOverlay(
         }
     }
 
+    private fun requestDeleteActionNodeFromSettings(flowId: String, nodeId: String) {
+        pendingSettingsModalAction = null
+        keepTransientSettingsOverlayAttached = false
+        settingsModal = SettingsModal.ConfirmDeleteActionNode(
+            flowId = flowId,
+            nodeId = nodeId,
+        )
+        recordPanelVisibilityEvent(
+            event = "settings_modal.show",
+            reason = "confirm_delete_action:$flowId/$nodeId",
+        )
+        touchUi()
+    }
+
+    private fun performDeleteActionNodeFromSettings(flowId: String, nodeId: String) {
+        val store = settingsEditorStore ?: return
+        store.selectFlow(flowId)
+        mutateSettingsEditor("已删除动作") {
+            it.removeNode(nodeId)
+        }
+    }
+
     @Composable
     private fun SettingsActionListPage() {
         val store = settingsEditorStore
@@ -2635,6 +2838,7 @@ class TaskControlPanelGlobalOverlay(
             maxVisibleJumpLanes = ACTION_LIST_MAX_VISIBLE_JUMP_LANES,
             persistSettingsEditor = { persistSettingsEditor("已保存任务") },
             mutateSettingsEditor = ::mutateSettingsEditor,
+            onDeleteNodeRequest = ::requestDeleteActionNodeFromSettings,
             openNodeEditor = { flowId, nodeId ->
                 store?.selectFlow(flowId)
                 store?.selectNode(nodeId)
@@ -2787,10 +2991,18 @@ class TaskControlPanelGlobalOverlay(
         }
         val taskName = tasks.firstOrNull { it.taskId == candidateTaskId }?.name ?: "未命名任务"
         ensureSettingsOverlayView()
+        applySettingsOverlayFocusabilityForCurrentContext(reason = "prompt_start_task_confirmation")
+        setSettingsOverlayInteractionEnabled(enabled = true)
+        setSettingsOverlayViewVisible(
+            visible = true,
+            reason = "prompt_start_task_confirmation",
+        )
         setPendingSettingsOverlayRemoval(
             pending = false,
             reason = "prompt_start_task_confirmation",
         )
+        pendingSettingsModalAction = null
+        keepTransientSettingsOverlayAttached = true
         settingsModal = SettingsModal.ConfirmStartTask(
             taskId = candidateTaskId,
             taskName = taskName,

@@ -687,10 +687,50 @@
 618. 稳定性验证：以上“高采样回放降级保护 + 执行器日志纠正”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
 619. 运行态节流尾部竞态收口：`resetRunningTraceUiThrottle()` 新增 `effectScheduler.cancel(RUNNING_TRACE_UI_FLUSH)`，避免会话切换后迟到 flush 回调触发跨会话 UI 刷新。
 620. 稳定性验证：以上“运行态节流尾部竞态收口”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+621. 删除任务确认弹窗接入统一模态管线：新增 `SettingsModal.ConfirmDeleteTask` 与 `SettingsModalAction.DeleteTask`，任务列表菜单删除操作改为“先弹确认（统一动画 + scrim）再执行删除”，不再走无动画直删路径。
+622. 开始任务弹窗关闭动效时序优化：`TaskControlModalHost` 的 scrim/card 过渡参数统一到同一套时长与 easing，并将 `MODAL_EXIT_DELAY_MS` 调整为 180ms，减少确认关闭时业务副作用抢占导致的背景闪烁感。
+623. 模态规则回归测试扩展：`TaskControlPanelSettingsModalTest` 新增“删除任务 action 映射”和“删除任务 warning model 映射”用例，覆盖新增确认弹窗决策路径。
+624. 稳定性验证：以上“删除任务确认弹窗接入 + 模态退出时序优化”改造后已通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+625. 删除动作确认弹窗统一化：动作列表页移除内嵌确认 `Card`，新增 `ConfirmDeleteActionNode/DeleteActionNode`，动作删除改为走统一 `settingsModal`（全屏半透明 scrim + 统一进退场动画）。
+626. 编辑页交互接线收敛：`TaskControlSettingsActionListPage` 新增 `onDeleteNodeRequest(flowId, nodeId)` 回调，删除菜单点击仅触发确认请求；实际删除在 modal 确认后由 `performDeleteActionNodeFromSettings(...)` 执行并持久化。
+627. 回归测试扩展：`TaskControlPanelSettingsModalTest` 新增“删除动作 action 映射”和“删除动作 warning model 映射”用例，确保动作删除确认弹窗行为稳定。
+628. 稳定性验证：以上“删除动作确认弹窗统一化”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+629. 任务删除确认入口统一：`TaskLibraryPanel` 移除内嵌 `DeleteTaskConfirmDialog`，任务菜单“删除”改为直接委托 `onDeleteTask(taskId)`，由 overlay 侧统一走 `SettingsModal.ConfirmDeleteTask` 模态流程。
+630. 模态管理一致性回归：任务删除与动作删除均由 `TaskControlPanelSettingsModal.kt` 统一建模、由 `TaskControlModalHost` 统一渲染（全屏 scrim + 动画），避免页面内确认卡片与全局模态并存。
+631. 稳定性验证：以上“任务删除确认入口统一”改造后再次通过 `:app:compileDebugKotlin` 与 `TaskControlPanelSettingsModalTest`。
+632. 开始任务确认闪烁定位与时序修复：`onSettingsModalAction` 改为“仅登记 pending action + 先关闭 modal”；实际业务动作（开始任务/删除）在 `settingsModalTransitionState` 退出动画 `idle` 后执行，替代固定 `MODAL_EXIT_DELAY_MS`，避免业务副作用抢占关闭过渡。
+633. 模态链路诊断日志补齐：新增 `settings_modal transition`、`pending_action`、`execute_pending_action` 日志，并在 `TaskControlModalHost` 增加 `modal_host` 可见状态日志，便于复现时对齐“动画状态 -> 执行动作 -> overlay remove”的时序。
+634. 稳定性验证：以上“modal 动作改为动画结束后执行 + 日志补齐”改造后再次通过 `testDebugUnitTest` 与 `assembleDebug`。
+635. 开始任务确认闪烁二次修复（基于实机日志）：观察到 `ConfirmStartTask` 关闭后在 `modal idle` 同帧触发 `settings_overlay.remove`；新增 `keepTransientSettingsOverlayAttached`，对“仅临时显示确认弹窗（settingsVisible=false）”场景改为关闭后保留 settings overlay（`INVISIBLE + NOT_TOUCHABLE`），不立刻 removeView。
+636. 临时 overlay 复用接线：`promptStartLastTaskConfirmation()` 在显示弹窗前显式恢复 `setSettingsOverlayInteractionEnabled(true)`，并在进入正式设置页路由时清理保留标记，防止状态串扰。
+637. 诊断结论记录：已能在日志中稳定观察 `ConfirmStartTask` 的 transition 时序与 overlay remove 时机；本轮修复目标是规避 MIUI 窗口级 remove 带来的闪帧风险。
+638. 稳定性验证：以上“临时确认弹窗关闭后保留 overlay”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+639. 开始任务确认回归修复：修正“确认开始后任务未立即执行”问题，将临时 overlay 的 `setSettingsOverlayInteractionEnabled(false)` 从 `dismissSettingsModal()` 前置时机，后移到 `modalTransitionSettled` 后执行，确保 pending action 可在动画结束后立即触发。
+640. 临时 overlay 收口策略补齐：当无 pending action（如点击取消）且 modal 退出完成时，统一隐藏临时 overlay（不可见/不可触摸），避免残留拦截。
+641. 稳定性验证：以上“开始任务确认执行时序回归修复”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+642. 取消后触摸被拦截问题修复：`SettingsOverlayLifecycleState` 新增 `retainTransientOverlay`，`shouldRenderSettingsOverlay(...)` 在临时保留 overlay 场景继续渲染状态机，从而确保“modal 退出后禁交互/隐藏临时 overlay”的副作用必达。
+643. 生命周期判定单测扩展：`TaskControlPanelSettingsOverlayLifecycleTest` 新增 `retainTransientOverlay` 相关断言，覆盖“需渲染/不可移除/阻塞签名”三条分支，防止后续再次出现“提前 short-circuit 导致副作用不执行”。
+644. 稳定性验证：以上“取消后触摸拦截修复 + 生命周期单测扩展”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+645. 关闭闪烁三次优化：临时确认弹窗收口从“禁交互+改 `View.INVISIBLE`”改为“仅禁交互（保持 view 可见）”，避免窗口可见性切换导致的闪帧。
+646. 临时保留标记收口：在 modal 退出 settled 后执行 `setSettingsOverlayTouchEnabled(false)` 的同时清理 `keepTransientSettingsOverlayAttached=false`，并触发 `touchUi()`，保证后续不再重复进入临时保留态。
+647. 稳定性验证：以上“仅禁交互不改可见性”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+648. 关闭闪烁四次优化：`removeSettingsOverlayIfIdle()` 在主面板仍显示时改为“保留 settings overlay 并禁触摸”，不再执行 `removeView`，减少偶发窗口级 add/remove 导致的闪烁。
+649. 可观测性补齐：新增 `settings_overlay.keep_attached` trace 事件，用于区分“空闲移除”与“空闲保留”两条收口路径。
+650. 稳定性验证：以上“主面板存活期间保留 settings overlay”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+651. 关闭闪烁五次优化：`ensureOverlayView()` 与 `ensureSettingsOverlayView()` 的 `ComposeView` 显式设置透明背景（`setBackgroundColor(Color.TRANSPARENT)`），避免收口帧出现系统默认底色闪烁。
+652. 稳定性验证：以上“ComposeView 透明底色”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+653. 关闭闪烁六次优化：新增 `applySettingsOverlayFocusabilityForCurrentContext(...)`，在“开始任务确认（settingsVisible=false）”场景下将 settings overlay 设为 `NOT_FOCUSABLE`，降低 MIUI 系统栏/焦点切换带来的偶发闪帧；进入设置页时恢复为可聚焦。
+654. 稳定性验证：以上“临时确认场景焦点策略收敛”改造后再次通过 `:app:compileDebugKotlin`、`testDebugUnitTest` 与 `assembleDebug`。
+655. 关闭闪烁七次优化（基于实机日志）：定位到开始任务确认关闭后会触发 `settings_overlay_interaction enabled=false`（`FLAG_NOT_TOUCHABLE` 切换），并伴随 MIUI `TaskControlSettingsOverlay` 排除窗口重算；临时确认弹窗收口改为“仅切 `View.INVISIBLE`，不再改窗口触摸 flags”，降低系统窗口层重排导致的闪烁概率。
+656. 临时确认弹窗显示收口补齐：`promptStartTaskConfirmation()` 显式恢复 `settingsOverlayView` 为 `VISIBLE`；`removeSettingsOverlayIfIdle()` 的 keep-attached 分支同步改为可见性隐藏，避免在主面板存活时反复触发窗口 flags 更新。
+657. 稳定性验证：以上“可见性收口替代触摸 flags 收口”改造后再次通过 `:app:compileDebugKotlin` 与 `testDebugUnitTest`。
+658. 关闭闪烁八次优化（渲染竞态收口）：移除 overlay 与 settings overlay 的 `ComposeView.setLayerType(HARDWARE)` 强制硬件层，避免 full-screen overlay 在可见性切换时触发层重建闪帧。
+659. 关闭闪烁九次优化（动画尾帧收口）：开始任务确认弹窗在 `settingsModalTransitionState` 退出 `idle` 后，先等待下一帧（`withFrameNanos`）再隐藏临时 overlay，避免同帧“动画结束 + View 隐藏”导致的尾帧闪烁。
+660. 稳定性验证：以上“硬件层移除 + 下一帧收口”改造后再次通过 `:app:compileDebugKotlin` 与 `testDebugUnitTest`。
 
 ## 3. 正在进行
 
-1. 全局操作面板实机交互打磨（录制态按钮间距/状态文案/误触控制、运行态信息密度与按钮排布、录制提示层反馈；录制保存后开始确认链路已接入）。
+1. 全局操作面板实机交互打磨（录制态按钮间距/状态文案/误触控制、运行态信息密度与按钮排布、录制提示层反馈；录制保存后开始确认链路已接入；本轮新增的“开始任务确认关闭动效/删除任务确认弹窗”继续做实机回归）。
 2. 调试面板前置能力推进：已打通“任务菜单历史记录入口 + 删除能力”，下一步继续补齐筛选、搜索与分页体验。
 3. 继续推进页面状态层拆分第二阶段：运行态、本次执行会话态、设置路由、设置模态决策、设置页数据装配与 overlay/主面板状态机与展示判定已完成首轮收敛；延迟副作用调度、WindowManager/View 操作执行器、运行执行 UI 映射、持久化 payload、运行引擎配置、写入可观测性与作业生命周期取消已收敛，下一步仅保留实机验证中发现的真实问题修复。
 4. 编辑页组件化：`TaskList/ActionList/NodeEditor`、状态容器、规则逻辑与单测已完成；当前进入实机联调与体验回归阶段。

@@ -568,8 +568,9 @@ class TaskControlPanelGlobalOverlay(
             reason = "$reason -> ${mode.name}",
         )
         if (mode == PanelDisplayMode.MINI && snapOnMiniEnter) {
+            val animateEnterSnap = !reason.startsWith("minimize_running_panel")
             snapPanelToHorizontalEdge(
-                animated = true,
+                animated = animateEnterSnap,
                 reason = "enter_mini:$reason",
             )
         }

@@ -834,6 +834,9 @@
 765. 面板透明区域拦截点击修复：`applyPanelWindowSizePolicy(...)` 在非锁定态从固定窗口尺寸（`300x172dp`）改为 `WRAP_CONTENT`，使 WindowManager 窗口边界与可见卡片一致，避免透明底部/右侧区域遮挡下层点击。
 766. 过渡策略保持不变：仅在 `panelWindowSizeTransitionLocked=true` 的短时过渡窗口继续使用锁定尺寸；过渡结束后恢复 `WRAP_CONTENT`，兼顾动画稳定与触摸命中准确性。
 767. 稳定性验证：以上“透明区域触摸拦截修复”改造后通过 `:app:compileDebugKotlin` 与 `:app:testDebugUnitTest`。
+768. RUNNING->MINI 贴边视觉抖动修复：`setPanelDisplayMode(...)` 在 `reason=minimize_running_panel` 的 enter-mini 路径改为 `snapPanelToHorizontalEdge(animated=false)`，避免位移动画与模式切换动画并发造成“先留缝再贴边”的两段观感。
+769. 吸边动效保留策略：仅 RUNNING 面板最小化进入 MINI 关闭位移动画；拖拽结束吸边与其它入口仍保持原有吸边动画。
+770. 稳定性验证：以上“RUNNING 最小化即时贴边”改造后通过 `:app:compileDebugKotlin`。
 
 ## 3. 正在进行
 
